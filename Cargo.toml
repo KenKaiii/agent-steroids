@@ -2,6 +2,8 @@
 name = "steroids"
 version = "0.1.0"
 edition = "2024"
+# let-chains (`if let ... && ...`) stabilised here; edition 2024 alone is 1.85.
+rust-version = "1.88"
 
 [dependencies]
 anyhow = "1.0.104"

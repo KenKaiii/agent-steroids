@@ -110,7 +110,7 @@ Results are spread across different repos on purpose, so the agent sees four pro
 
 When nothing matches, it says why. Sometimes that answer is "none of your repos cover this, go add some" instead of letting the agent spin.
 
-Add `--json` to any search if you want machine-readable output.
+`search`, `define` and `repos` all take `--json` if you want machine-readable output.
 
 ## 🧹 Keeping it fresh
 
@@ -162,7 +162,7 @@ Same on any machine. Nothing else to set up.
 
 ## 👨‍💻 For devs
 
-Rust 1.85 or newer (edition 2024). No other dependencies, no runtime, no daemon.
+Rust 1.88 or newer. No other dependencies, no runtime, no daemon.
 
 ```bash
 git clone https://github.com/KenKaiii/agent-steroids.git
