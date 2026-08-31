@@ -72,10 +72,16 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
         // A gutter of real line numbers lets the agent cite an exact location
         // and lets a person scroll straight to it.
         out.push('\n');
-        if !item.scope.is_empty() {
+        // Skip the scope line when the match is the definition itself, or when
+        // the definition is already visible in the context below it.
+        let start = item.context_start();
+        let scope_shown = item
+            .context
+            .iter()
+            .any(|line| line.trim() == item.scope.trim());
+        if !item.scope.is_empty() && !scope_shown {
             out.push_str(&format!("  in {}\n", item.scope));
         }
-        let start = item.context_start();
         let width = (start + item.context.len()).to_string().len();
         for (offset, line) in item.context.iter().enumerate() {
             let number = start + offset;

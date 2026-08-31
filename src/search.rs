@@ -28,8 +28,6 @@ pub const DEFAULT_CONTEXT_LINES: usize = 3;
 /// the code an agent wants. Bare `*` is absent too, so C pointer lines like
 /// `*ptr = value` survive; block comments are handled by BLOCK_DELIMITERS.
 const COMMENT_PREFIXES: &[&str] = &["#", "//", "/*", "--", "\"\"\"", "'''"];
-/// (opening, closing) delimiters for multi-line documentation blocks.
-const BLOCK_DELIMITERS: &[(&str, &str)] = &[("\"\"\"", "\"\"\""), ("'''", "'''"), ("/*", "*/")];
 
 pub struct Match {
     pub repo: String,
@@ -96,38 +94,85 @@ fn is_prose(line: &str) -> bool {
         .any(|prefix| trimmed.starts_with(prefix))
 }
 
+/// A run of block-comment lines longer than this means the scanner lost sync,
+/// not that a genuine comment is that long. Real docstrings are far shorter.
+const MAX_BLOCK_COMMENT_LINES: usize = 60;
+
+/// Python docstring delimiters, named to keep the quoting readable.
+const TRIPLE_DOUBLE: &str = "\"\"\"";
+const TRIPLE_SINGLE: &str = "'''";
+
 /// 1-based line numbers inside docstrings or block comments.
 ///
-/// Deliberately a scanner, not a parser: it only has to be right often enough
-/// to keep documentation out of results that should show implementations.
-fn prose_lines(lines: &[&str]) -> HashSet<usize> {
+/// Deliberately a scanner rather than a parser, but it fails open. A delimiter
+/// appearing inside a string literal (`v.startswith(('/*', '//'))` in Python is
+/// a real example) would otherwise leave the scanner believing a comment never
+/// closed, marking the rest of the file as prose and hiding thousands of lines
+/// of real code. Two guards prevent that:
+///
+/// 1. Delimiters are chosen by language, so C-style `/* */` is not looked for
+///    in a Python file at all.
+/// 2. A block that never closes within `MAX_BLOCK_COMMENT_LINES` is treated as
+///    a mistake and abandoned, keeping the damage local.
+///
+/// Showing a comment that should have been filtered is a small cost. Hiding
+/// real code the user asked for is not.
+fn prose_lines(lines: &[&str], language: &str) -> HashSet<usize> {
+    // Docstring syntax is per-language; looking for the wrong delimiters is
+    // what desynchronises the scanner.
+    let delimiters: &[(&str, &str)] = match language {
+        "python" => &[
+            (TRIPLE_DOUBLE, TRIPLE_DOUBLE),
+            (TRIPLE_SINGLE, TRIPLE_SINGLE),
+        ],
+        "ruby" | "shell" | "elixir" | "lua" | "sql" => &[],
+        // C-family and everything else that uses /* */.
+        _ => &[("/*", "*/")],
+    };
+    if delimiters.is_empty() {
+        return HashSet::new();
+    }
+
     let mut inside: Option<&str> = None;
+    let mut opened_at = 0usize;
     let mut marked = HashSet::new();
+    let mut pending: Vec<usize> = Vec::new();
+
     for (index, line) in lines.iter().enumerate() {
         let number = index + 1;
         let trimmed = line.trim();
         match inside {
             None => {
-                for (opener, closer) in BLOCK_DELIMITERS {
+                for (opener, closer) in delimiters {
                     let Some(rest) = trimmed.split_once(opener).map(|(_, rest)| rest) else {
                         continue;
                     };
-                    marked.insert(number);
                     // A one-line docstring opens and closes on the same line.
-                    if !rest.contains(closer) {
+                    if rest.contains(closer) {
+                        marked.insert(number);
+                    } else {
                         inside = Some(closer);
+                        opened_at = number;
+                        pending.push(number);
                     }
                     break;
                 }
             }
             Some(closer) => {
-                marked.insert(number);
+                pending.push(number);
                 if trimmed.contains(closer) {
+                    marked.extend(pending.drain(..));
+                    inside = None;
+                } else if number - opened_at > MAX_BLOCK_COMMENT_LINES {
+                    // Almost certainly a delimiter inside a string literal.
+                    // Discard the run rather than hide the rest of the file.
+                    pending.clear();
                     inside = None;
                 }
             }
         }
     }
+    // An unterminated block at end of file is also a desync; drop it.
     marked
 }
 
@@ -501,6 +546,28 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// Whether a pattern switches on case-insensitive matching by itself.
+///
+/// Only leading group flags are considered, since a flag set mid-pattern
+/// applies from that point and the literals before it are still exact. Being
+/// wrong in the cautious direction only costs a full scan.
+fn has_inline_case_flag(pattern: &str) -> bool {
+    let mut rest = pattern;
+    while let Some(open) = rest.find("(?") {
+        // A flag group ends at the first ) or :, e.g. (?i) or (?im:...).
+        let after = &rest[open + 2..];
+        let end = after.find([')', ':']).unwrap_or(after.len());
+        let flags = &after[..end];
+        // Flags after a '-' are being turned off, not on.
+        let enabled = flags.split('-').next().unwrap_or("");
+        if enabled.contains('i') {
+            return true;
+        }
+        rest = &after[end.min(after.len())..];
+    }
+    false
+}
+
 pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Match>> {
     if pattern.len() > MAX_PATTERN_LENGTH {
         bail!("pattern too long");
@@ -512,15 +579,19 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
 
     // Trigram narrowing is case-sensitive, so it would discard documents that a
     // case-insensitive matcher should still find. Scan everything instead.
-    let narrowed = if query.ignore_case {
+    //
+    // The flag alone is not enough: a pattern can turn on case-insensitivity
+    // itself with an inline `(?i)`, and narrowing on that silently returns
+    // nothing at all rather than fewer results.
+    let narrowed = if query.ignore_case || has_inline_case_flag(pattern) {
         None
     } else {
         candidates(store, pattern)?
     };
 
     let mut sql = String::from(
-        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, '') FROM documents d \
-         JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
+        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, ''), d.language \
+         FROM documents d JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
     );
     let mut binds: Vec<String> = Vec::new();
     if let Some(repo) = query.repo {
@@ -533,16 +604,22 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     }
 
     let mut statement = store.db.prepare(&sql)?;
-    let rows: Vec<(i64, String, String, String)> = statement
+    let rows: Vec<(i64, String, String, String, String)> = statement
         .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?
         .collect::<Result<_, _>>()?;
     drop(statement);
 
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _, path, _)| {
+        .filter(|(id, _, path, _, _)| {
             narrowed.as_ref().is_none_or(|set| set.contains(id))
                 && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
         })
@@ -562,7 +639,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
 
-    for (doc_id, repo, path, commit_sha) in rows {
+    for (doc_id, repo, path, commit_sha, language) in rows {
         if by_repo.get(&repo).is_some_and(|v| v.len() >= per_repo_cap) {
             continue;
         }
@@ -573,7 +650,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
         let text = String::from_utf8_lossy(&content).into_owned();
         let lines: Vec<&str> = text.lines().collect();
         let prose = if query.skip_comments {
-            prose_lines(&lines)
+            prose_lines(&lines, &language)
         } else {
             HashSet::new()
         };
@@ -638,6 +715,68 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
 
 #[cfg(test)]
 mod tests {
+    /// A delimiter inside a string literal must not convince the scanner that
+    /// a comment never closed. Real case: a Python file matching on "/*" left
+    /// 2,940 lines of code invisible to search.
+    #[test]
+    fn stray_delimiter_does_not_hide_the_rest_of_the_file() {
+        let mut src = vec![
+            "def parse(v):",
+            "    if v.startswith(('/*', '//')):",
+            "        return ''",
+        ];
+        // Plenty of ordinary code after the stray delimiter.
+        src.extend(std::iter::repeat_n("    x = 1", 200));
+        src.push("class RetryManager:");
+
+        // Python never uses /* */, so it is not even looked for.
+        let prose = super::prose_lines(&src, "python");
+        assert!(prose.is_empty(), "python file marked prose: {prose:?}");
+
+        // In a C-family file the same text does open a block comment, but the
+        // run is abandoned rather than swallowing the file.
+        let prose = super::prose_lines(&src, "c");
+        assert!(
+            !prose.contains(&src.len()),
+            "last line hidden by an unclosed comment"
+        );
+        assert!(
+            prose.len() < src.len() / 2,
+            "{} of {} lines hidden",
+            prose.len(),
+            src.len()
+        );
+    }
+
+    /// Genuine docstrings must still be filtered.
+    #[test]
+    fn real_docstrings_are_still_detected() {
+        let src = vec![
+            "def f():",
+            "    \"\"\"Summary line.",
+            "    More detail here.",
+            "    \"\"\"",
+            "    return 1",
+        ];
+        let prose = super::prose_lines(&src, "python");
+        assert_eq!(prose, [2, 3, 4].into_iter().collect());
+    }
+
+    /// A pattern that turns on case-insensitivity itself must disable trigram
+    /// narrowing, or the search silently returns nothing.
+    #[test]
+    fn detects_inline_case_insensitive_flag() {
+        for pattern in ["(?i)retry", "(?im)retry", "(?i:retry)", "foo(?i)bar"] {
+            assert!(super::has_inline_case_flag(pattern), "missed {pattern}");
+        }
+        for pattern in ["retry", "(?m)retry", "(?-i)retry", "(?m-i:retry)", "(a|b)"] {
+            assert!(
+                !super::has_inline_case_flag(pattern),
+                "false positive {pattern}"
+            );
+        }
+    }
+
     /// Permalinks must only be offered when the stored hash is a real git
     /// commit; our archive checksum is 64 hex characters and GitHub 404s on it.
     #[test]
@@ -709,11 +848,11 @@ mod tests {
             "    \"\"\"",
             "    x = 1",
         ];
-        let prose = prose_lines(&src);
+        let prose = prose_lines(&src, "python");
         assert!(prose.contains(&2) && prose.contains(&3) && prose.contains(&4));
         assert!(!prose.contains(&1) && !prose.contains(&5));
 
-        let single = prose_lines(&["    \"\"\"one liner.\"\"\"", "    y = 2"]);
+        let single = prose_lines(&["    \"\"\"one liner.\"\"\"", "    y = 2"], "python");
         assert!(!single.contains(&2), "one-line docstring leaked");
     }
 
