@@ -1,143 +1,101 @@
-# steroids
+<p align="center">
+  <strong>Agent Steroids</strong><br>
+  Live code from real repos, on your machine, for your coding agent.
+</p>
 
-A local corpus of open-source code. Index other people's repositories, then let
-a coding agent search them for real implementations instead of guessing.
+---
 
-One binary. No runtime, no daemon, no MCP server — an agent calls `steroids
-search` the same way it calls `grep`.
+## 🧠 The problem nobody talks about
 
-## Install
+Your coding agent learned to code from a snapshot of the internet. That snapshot is old.
+
+It does not matter which model you use. Claude, GPT, Gemini, all of them got trained on a pile of GitHub repos, and then that pile stopped moving. Meanwhile the actual libraries kept shipping. New APIs, new patterns, breaking changes, better ways of doing the thing.
+
+So your agent writes code the way it was written a year ago, and sounds completely confident about it.
+
+You can paste in docs. That helps a bit. But docs tell you what a thing is supposed to do, not how good engineers actually use it in a real project with real edge cases.
+
+## 🚧 And the usual workaround is worse
+
+There are tools that let an agent search public code through an API. They work, right up until you actually lean on them.
+
+- **Rate limits.** Pull a few dozen samples and you are cut off.
+- **Slow.** Every single search is a round trip to somebody else's server.
+- **Not yours.** They pick what is searchable. The service goes down, so does your agent.
+
+That is fine for looking something up once. It falls apart when your agent wants to check thirty different implementations before writing a function.
+
+## ✅ What this does instead
+
+You build your own library of code. Locally.
+
+Pick the repos you care about. Building an AI framework? Grab fifty AI framework repos. Writing a payments integration? Grab the ones that already did it well. Then your agent searches all of it instantly, as many times as it likes, forever.
+
+No rate limits. No waiting. No API keys. It is a file on your disk.
+
+And because these are live repos, one command pulls the newest code down whenever you want. Your agent stops guessing from memory and starts reading what people are shipping right now.
+
+## 🤯 The part that surprises people
+
+It is tiny.
+
+| | |
+|---|---|
+| 5 repos | **10 MB** |
+| 40 repos | **145 MB** |
+| Roughly | **2 to 4 MB per repo** |
+
+We throw away about 90% of every repo before storing it. No images, no docs, no READMEs, no lock files, no bundled dependencies. Just the code worth learning from, squeezed down hard.
+
+Those 40 repos were 382 MB of source. The code stores as 94 MB, and the rest is the search index that makes lookups instant.
+
+Searches come back in **10 to 40 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
+
+## 🚀 Get it
+
+You need [Rust](https://rustup.rs) installed. Then:
 
 ```bash
-cargo install --path .
+cargo install --git https://github.com/KenKaiii/agent-steroids
 ```
 
-The corpus lives in `~/.steroids` by default, so the command works from any
-directory. Override with `--root` or `$STEROIDS_ROOT`.
+That gives you a `steroids` command that works from anywhere. Your library lives in `~/.steroids`.
 
-## Interactive
+Now fill it:
+
+```bash
+steroids add openai/openai-agents-python crewAIInc/crewAI
+steroids index
+```
+
+Pasting a GitHub URL works too. And you can hand it a text file of hundreds of repos:
+
+```bash
+steroids add --from-file repos.txt
+```
+
+Not sure what to add? Let it go find things:
+
+```bash
+steroids discover 'topic:ai-agents language:python' --add
+steroids discover --trending --days 7 --language rust --add
+```
+
+## 🖥️ Have a look around
 
 ```bash
 steroids
 ```
 
-Opens a browser over the corpus: repositories, their files, and a live search
-that updates as you type. Arrow keys move, `↵` opens, `esc` goes back, `q`
-quits. From the repository list: `a` adds, `d` removes, `u` re-fetches
-everything. Long jobs run in the background with progress, so the UI never
-freezes.
+Run it with nothing after it and you get a proper interface. Browse your repos, open any file, search as you type with results appearing live. Arrow keys to move, `esc` to go back, `q` to quit. Press `a` to add a repo, `d` to remove one, `u` to refresh everything.
 
-```
- steroids   5 repositories · 2810 files · ~/.steroids
-╭ Search ──────────────────────────────────────────────────────────────╮
-│ asyncio.gather                                                       │
-╰──────────────────────────────────────────────────────────────────────╯
-╭ 40 results ────────────────────╮╭ Preview ───────────────────────────╮
-│ crewAI  cleanup.py:261         ││ crewAIInc/crewAI/lib/…/cleanup.py  │
-│   async with semaphore:        ││                                    │
-│ langgraph  __init__.py:297     ││             )                      │
-│   async def _aembed_search_qu… ││                                    │
-│ autogen  scenario.py:369       ││ ▌  results = await asyncio.gather( │
-╰────────────────────────────────╯╰────────────────────────────────────╯
- type to search   ↑↓ results   ↵ open   esc back
-```
+Downloads run in the background, so it never freezes on you.
 
-## Commands
+## 🤖 Hooking up your agent
 
-```bash
-steroids add openai/openai-agents-python  # owner/name
-steroids add https://github.com/openai/openai-agents-python   # or a pasted URL
-steroids add --from-file repos.txt        # bulk, one per line
-steroids index                            # after any add
+There is no plugin to install and no server to run. Your agent just runs the command, the same way it runs `grep`.
 
-steroids search 'class \w+Agent\('        # regex, all repos
-steroids define RunContext                # where a symbol is defined
-steroids show <repo> <path>               # full file
-
-steroids repos                            # what is indexed
-steroids files <repo>                     # what was kept from one repo
-steroids update                           # re-fetch everything at latest commit
-steroids remove <repo>
-steroids compact                          # reclaim space after updates/removals
-steroids stats                            # disk usage
-```
-
-## Bulk ingest
-
-```bash
-steroids add --from-file repos.txt              # hundreds at a time
-steroids add --from-file repos.txt --parallel 16
-```
-
-**`add` makes no GitHub API calls.** Code comes from codeload, which is not
-rate limited, so a 500-repository ingest is bounded by your bandwidth rather
-than by a request quota — no token needed, no 60/hour ceiling.
-
-Measured: 40 repositories, 42,679 files, 382MB of source in **1m36s** at
-`--parallel 16`, with the API quota fully exhausted. That source compresses to
-94MB stored.
-
-`--metadata` records stars and the last-commit date that `decay` needs, at the
-cost of one rate-limited API call per repository. `discover` needs the search
-API; `update` uses metadata but falls back to code-only if the quota runs out,
-so a big refresh always completes.
-
-## Filling the corpus fast
-
-```bash
-steroids discover 'topic:ai-agents language:python'   # preview
-steroids discover 'topic:mcp' --add                   # index them
-steroids discover --trending --days 7 --language rust --add
-```
-
-Any [GitHub search qualifiers](https://docs.github.com/search-github/searching-on-github/searching-for-repositories)
-work. Already-indexed and archived repositories are skipped, and `min_stars`
-filters out noise — though your own `stars:` or `archived:` qualifier wins if
-you write one. `--trending` approximates GitHub's trending page (which has no
-API) as "pushed recently, most stars first".
-
-Discovery uses the search API, which allows 10 requests per minute without
-`GITHUB_TOKEN`. Ingesting the results does not.
-
-## Pruning what has gone stale
-
-```bash
-steroids config decay_months 6      # 0 = never, the default
-steroids decay --dry-run            # see what would go
-steroids decay
-```
-
-Decay is measured from the repository's **last upstream commit**, not when you
-last indexed it. Repositories indexed before this feature existed have no
-recorded commit date and are never removed — run `steroids update` to fill it
-in. `decay_archived` also drops repositories the owner has archived.
-
-## Settings
-
-```bash
-steroids config                     # show everything
-steroids config decay_months 6      # change one
-```
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `decay_months` | `0` | Remove repos with no commit in N months. 0 disables. |
-| `decay_archived` | `false` | Also remove archived repos. |
-| `auto_discover` | `false` | Top up from `discover_query` after each `update`. |
-| `discover_query` | `topic:ai-agents` | Qualifiers for discovery. |
-| `discover_limit` | `25` | Max repos one discovery run adds. |
-| `min_stars` | `100` | Ignore repos below this. |
-
-Settings live inside the corpus, so they travel with it.
-
-Set `GITHUB_TOKEN` to raise the API rate limit from 60 to 5,000 requests/hour.
-This affects `discover`, `update` and `add --metadata`; plain `add` needs no
-token at any scale.
-
-## Giving it to a coding agent
-
-No integration needed — the agent runs the CLI. Tell it, in your agent config
-or system prompt:
+Drop this into your agent's instructions:
 
 ```
 You have a local corpus of indexed open-source repositories:
@@ -148,73 +106,107 @@ You have a local corpus of indexed open-source repositories:
 Use it to compare how other projects solved a problem before writing your own.
 ```
 
-`search`, `define` and `repos` take `--json` for structured output. On an empty
-result the JSON carries a `reason` (`topic_absent`, `near_miss`, …) and a
-`suggestion`, so a caller can branch without parsing prose.
+Results are spread across different repos on purpose, so the agent sees four projects' takes side by side instead of four files from one project. Every snippet is labelled with the function it came from, so it can skip the irrelevant ones without opening anything.
 
-Results are spread across repositories so the agent sees several projects'
-approaches side by side, each snippet labelled with its enclosing function or
-class.
+When nothing matches, it says why. Sometimes that answer is "none of your repos cover this, go add some" instead of letting the agent spin.
 
-## What it returns
+Add `--json` to any search if you want machine-readable output.
 
-```
---- openai/openai-agents-python/examples/basic/retry.py:42  [async def policy(...)]
-    if isinstance(decision, RetryDecision):
-        if not decision.retry:
+## 🧹 Keeping it fresh
+
+```bash
+steroids update      # pull the latest code for everything
+steroids repos       # see what you have
+steroids stats       # see what it costs you
 ```
 
-When nothing matches, the output says *why* — an empty corpus, a topic no
-indexed project covers, a near-miss spelling, or a pattern with nothing
-searchable in it — so the agent either retries usefully or tells you which
-repositories to add.
+Repos go quiet. You can have those cleaned out automatically:
 
-## Measured (5 AI-agent repositories)
+```bash
+steroids config decay_months 6
+steroids decay --dry-run
+steroids decay
+```
 
-| | |
-|---|---|
-| Source indexed | 25.6 MB (2,810 files, after filtering) |
-| On disk | **10.1 MB** (5.0 MB code + 5.1 MB index) |
-| Per repository | ~1 MB stored |
-| Search | **0–50 ms** (total process time) |
-| Binary | 8 MB, no runtime |
+That measures from the last actual commit, not from when you added it. Dry run first, always.
 
-Extrapolating: 50 repos ≈ 100 MB, 500 repos ≈ 1 GB.
+## ⚙️ All the settings
 
-## How it stays small
+```bash
+steroids config                  # show everything
+steroids config min_stars 500    # change one
+```
 
-- **Code only.** No READMEs, images, docs, tests, lockfiles, vendored deps or
-  generated files. Roughly 90% of files in a repo are dropped — see
-  `src/filters.rs`. `examples/` is kept on purpose: worked examples are prime
-  material for an agent.
-- **Tarballs, not clones.** We want current code, not history.
-- **Shared zstd dictionary.** Thousands of small source files compress ~5x
-  against a dictionary trained on the corpus itself.
-- **Non-positional trigram index.** Stores which files contain a trigram, not
-  where. A fraction of the size of a positional index; queries narrow with the
-  index and confirm with a real regex.
+| Setting | Default | What it does |
+|---|---|---|
+| `decay_months` | `0` | Drop repos with no commits in N months. 0 means never |
+| `decay_archived` | `false` | Also drop repos the owner shut down |
+| `auto_discover` | `false` | Top up with new repos on every update |
+| `discover_query` | `topic:ai-agents` | What to look for when discovering |
+| `discover_limit` | `25` | Cap on how many one discovery run adds |
+| `min_stars` | `100` | Skip anything below this |
 
-## Portable
+Settings live inside the library itself, so they travel with it.
 
-The corpus is a directory: `corpus.db` plus `blobs.bin`. Copy it to an external
-drive and point at it:
+## 💾 Taking it with you
+
+The whole thing is one folder. Copy it to an external drive and point at it:
 
 ```bash
 STEROIDS_ROOT=/Volumes/MyDrive/steroids steroids search 'retry'
 ```
 
-## Layout
+Same on any machine. Nothing else to set up.
 
-```
-src/filters.rs  what earns disk space
-src/fetch.rs    GitHub tarball ingest
-src/store.rs    compressed content store (sqlite + blobs.bin)
-src/index.rs    trigram index
-src/search.rs   query: narrow by trigram, verify by regex
-src/render.rs   output built for an agent to read
-src/main.rs     command line
+---
+
+## 👨‍💻 For devs
+
+Rust 1.85 or newer (edition 2024). No other dependencies, no runtime, no daemon.
+
+```bash
+git clone https://github.com/KenKaiii/agent-steroids.git
+cd agent-steroids
+cargo install --path .
 ```
 
 ```bash
-cargo test
+cargo test --release      # 25 tests
+cargo clippy --release --all-targets -- -D warnings
+cargo fmt
 ```
+
+Some tests need a populated corpus and skip without one. Point them at yours:
+
+```bash
+STEROIDS_TEST_ROOT=~/.steroids cargo test --release
+```
+
+**How it works.** Repos come down as tarballs straight from codeload, which has no rate limit, so a 500 repo ingest is capped by your bandwidth and nothing else. Files are filtered while the download is still streaming, so the full repo never lands on disk. What survives gets compressed against a shared zstd dictionary trained on your own corpus. Search narrows candidates with a non-positional trigram index, then confirms each hit with a real regex, which is why the index costs a fraction of what a normal one would.
+
+The GitHub API is only used for discovery and for the optional star and commit-date metadata that `decay` needs. Plain `add` never touches it.
+
+```
+src/filters.rs  what earns disk space
+src/fetch.rs    tarball download and filtering
+src/bulk.rs     parallel ingest
+src/store.rs    compressed content store (sqlite + blobs.bin)
+src/index.rs    trigram index
+src/search.rs   query: narrow by trigram, verify by regex
+src/tui/        the interactive browser
+```
+
+Set `GITHUB_TOKEN` to raise the discovery rate limit from 60 to 5,000 requests an hour. Ingest does not need it.
+
+---
+
+## 👥 Come hang out
+
+- [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
+- [Skool community](https://skool.com/kenkai)
+
+---
+
+<p align="center">
+  <strong>Your agent stops guessing. It reads what actually shipped.</strong>
+</p>
