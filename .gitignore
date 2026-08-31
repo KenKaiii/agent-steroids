@@ -1,0 +1,6 @@
+/target
+corpus-data/
+.env
+
+# Local agent scratch: screenshots and pasted files from chat sessions
+.gg/uploads/
