@@ -66,7 +66,29 @@ We throw away about 90% of every repo before storing it. No images, no docs, no 
 
 Those 40 repos were 382 MB of source. The code stores as 94 MB, and the rest is the search index that makes lookups instant.
 
-Searches come back in **10 to 40 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
+Searches come back in **5 to 30 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
+
+## ⚡ Against the hosted alternatives
+
+Same searches, run against tools that query public code over an API:
+
+| | Agent Steroids | Hosted code search |
+|---|---|---|
+| Plain literal | **5 ms** | one network round trip |
+| Regex | **26 ms** | one network round trip |
+| Symbol lookup | **8 ms** | one network round trip |
+| Rate limit | none | hit in seconds |
+| Works offline | yes | no |
+| Repos searched | the ones you chose | whatever they index |
+
+Our numbers are medians over nine runs on a corpus of 1,087 files, measured end
+to end including process startup.
+
+The rate limit matters more than the milliseconds. Testing this, one of the
+popular hosted search tools returned HTTP 429 on the **first** request and
+stayed there. That is fine when you look something up once. It falls apart when
+your agent wants thirty samples before writing a function, which is exactly what
+you want it doing.
 
 ## 🚀 Get it
 
