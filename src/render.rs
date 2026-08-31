@@ -66,9 +66,6 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
         if file != last_file {
             out.push_str(&format!("\nRepo: {}\n", item.repo));
             out.push_str(&format!("File: {}\n", item.path));
-            if let Some(link) = item.permalink() {
-                out.push_str(&format!("Link: {link}\n"));
-            }
             last_file = file;
         }
 
