@@ -1,0 +1,122 @@
+<!doctype html>
+<!--
+Source for assets/agent-steroids.png. Rendered at 1280x440 with a headless
+browser; regenerate after editing this file.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 440px;
+    background: #0b0d12;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Faint grid, so the flat background has texture without competing. */
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  /* Two soft colour washes give depth without a busy illustration. */
+  .glow-a, .glow-b {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+  }
+  .glow-a { width: 620px; height: 620px; left: -140px; top: -230px; background: rgba(34,211,238,.20); }
+  .glow-b { width: 560px; height: 560px; right: -120px; bottom: -240px; background: rgba(217,70,239,.18); }
+
+  .stage { position: relative; text-align: center; z-index: 2; }
+
+  .eyebrow {
+    font-size: 15px;
+    letter-spacing: .42em;
+    text-transform: uppercase;
+    color: #5f6b7d;
+    font-weight: 700;
+    margin-bottom: 26px;
+    padding-left: .42em;
+  }
+
+  .wordmark {
+    font-size: 112px;
+    font-weight: 800;
+    letter-spacing: -.035em;
+    line-height: .96;
+    background: linear-gradient(100deg, #22d3ee 0%, #38bdf8 34%, #a855f7 68%, #e879f9 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 44px rgba(56,189,248,.42));
+  }
+
+  .tagline {
+    margin-top: 30px;
+    font-size: 25px;
+    color: #aab6c6;
+    font-weight: 500;
+  }
+
+  .chips {
+    margin-top: 34px;
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+  .chip {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 15px;
+    color: #9fb3c8;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 999px;
+    padding: 9px 20px;
+  }
+  .chip b { color: #22d3ee; font-weight: 700; }
+
+  /* Two floating glyphs, kept small and to the edges so the type dominates. */
+  .glyph {
+    position: absolute;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-weight: 700;
+    color: rgba(34,211,238,.13);
+    z-index: 1;
+  }
+  .g1 { font-size: 150px; left: 40px;  top: 44px; }
+  .g2 { font-size: 132px; right: 46px; bottom: 34px; color: rgba(217,70,239,.15); }
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+  <div class="glow-a"></div>
+  <div class="glow-b"></div>
+
+  <div class="glyph g1">&lt;/&gt;</div>
+  <div class="glyph g2">{ }</div>
+
+  <div class="stage">
+    <div class="eyebrow">For your coding agent</div>
+    <div class="wordmark">AGENT STEROIDS</div>
+    <div class="tagline">Live code from real repos. On your machine.</div>
+    <div class="chips">
+      <span class="chip"><b>40</b> repos indexed</span>
+      <span class="chip"><b>40ms</b> searches</span>
+      <span class="chip"><b>0</b> rate limits</span>
+    </div>
+  </div>
+</body>
+</html>

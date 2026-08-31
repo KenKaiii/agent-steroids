@@ -166,7 +166,10 @@ fn corpus_root(flag: Option<PathBuf>) -> PathBuf {
     if let Some(path) = std::env::var_os("STEROIDS_ROOT") {
         return PathBuf::from(path);
     }
-    match std::env::var_os("HOME") {
+    // Windows sets USERPROFILE rather than HOME, and without this the corpus
+    // would land in whatever directory the command happened to run from.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    match home {
         Some(home) => PathBuf::from(home).join(".steroids"),
         None => PathBuf::from("./corpus-data"),
     }

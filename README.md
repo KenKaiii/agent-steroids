@@ -1,6 +1,10 @@
 # 💉 Agent Steroids
 
 <p align="center">
+  <img src="assets/agent-steroids.png" alt="Agent Steroids">
+</p>
+
+<p align="center">
   <strong>Live code from real repos, on your machine, for your coding agent.</strong>
 </p>
 
@@ -74,7 +78,51 @@ cargo install --git https://github.com/KenKaiii/agent-steroids
 
 That gives you a `steroids` command that works from anywhere. Your library lives in `~/.steroids`.
 
-Now fill it:
+## 🤖 Just let your agent do it
+
+Honestly, the easiest way to use this is to not use it yourself. Paste this to Claude Code, Cursor, Codex, whatever you run:
+
+```
+Install Agent Steroids for me: https://github.com/KenKaiii/agent-steroids
+
+Then look at what I am building, pick around 20 open source repos that solve
+similar problems well, and index them. Once that is done, tell me what you
+added and how much space it used.
+```
+
+That is it. It reads the README, installs it, works out what is relevant to your project, and fills your library.
+
+Then add this to your agent's permanent instructions (`CLAUDE.md`, `.cursorrules`, or wherever your tool keeps them) so it actually keeps using it:
+
+```
+I have a local corpus of real open source code at ~/.steroids. Search it
+before writing anything non-trivial, to see how other projects solved the
+same problem.
+
+  steroids search '<regex>' [--repo R] [--language L] [--limit N]
+  steroids define <Symbol>       where something is defined
+  steroids show <repo> <path>    read a full file
+  steroids repos                 what is indexed
+
+Add --json to search, define or repos for structured output.
+
+If a search says the topic is not covered, tell me which repos to add
+instead of guessing. Add them with: steroids add owner/name && steroids index
+```
+
+Now when you ask for a rate limiter, it goes and reads four real implementations first instead of recalling one from training.
+
+There is no plugin and no server to run. Your agent just calls the command, same as it calls `grep`.
+
+Results are spread across different repos on purpose, so the agent sees four projects' takes side by side instead of four files from one project. Every snippet is labelled with the function it came from, so it can skip the irrelevant ones without opening anything.
+
+When nothing matches, it says why. Sometimes that answer is "none of your repos cover this, go add some" instead of letting the agent spin.
+
+`search`, `define` and `repos` all take `--json` if you want machine-readable output.
+
+## 📚 Filling it yourself
+
+If you would rather drive it manually:
 
 ```bash
 steroids add openai/openai-agents-python crewAIInc/crewAI
@@ -103,27 +151,6 @@ steroids
 Run it with nothing after it and you get a proper interface. Browse your repos, open any file, search as you type with results appearing live. Arrow keys to move, `esc` to go back, `q` to quit. Press `a` to add a repo, `d` to remove one, `u` to refresh everything.
 
 Downloads run in the background, so it never freezes on you.
-
-## 🤖 Hooking up your agent
-
-There is no plugin to install and no server to run. Your agent just runs the command, the same way it runs `grep`.
-
-Drop this into your agent's instructions:
-
-```
-You have a local corpus of indexed open-source repositories:
-  steroids search '<regex>' [--repo R] [--language L] [--limit N]
-  steroids define <Symbol>
-  steroids show <repo> <path>
-  steroids repos
-Use it to compare how other projects solved a problem before writing your own.
-```
-
-Results are spread across different repos on purpose, so the agent sees four projects' takes side by side instead of four files from one project. Every snippet is labelled with the function it came from, so it can skip the irrelevant ones without opening anything.
-
-When nothing matches, it says why. Sometimes that answer is "none of your repos cover this, go add some" instead of letting the agent spin.
-
-`search`, `define` and `repos` all take `--json` if you want machine-readable output.
 
 ## 🧹 Keeping it fresh
 
