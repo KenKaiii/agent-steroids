@@ -39,6 +39,32 @@ pub struct Match {
     /// The enclosing def/class, so the agent can judge relevance without
     /// spending a `steroids show` call on the whole file.
     pub scope: String,
+    /// Commit the snapshot came from, when it is a real git hash. Empty when
+    /// only an archive checksum was available, in which case no permalink is
+    /// offered rather than a broken one.
+    pub commit_sha: String,
+}
+
+impl Match {
+    /// Line number of the first line of `context`.
+    pub fn context_start(&self) -> usize {
+        self.line_number
+            .saturating_sub(DEFAULT_CONTEXT_LINES)
+            .max(1)
+    }
+
+    /// A GitHub permalink to the matched line, if the commit is known.
+    pub fn permalink(&self) -> Option<String> {
+        // A git hash is 40 hex characters. Anything else is our archive
+        // checksum, which GitHub will not resolve.
+        if self.commit_sha.len() != 40 || !self.commit_sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        Some(format!(
+            "https://github.com/{}/blob/{}/{}#L{}",
+            self.repo, self.commit_sha, self.path, self.line_number
+        ))
+    }
 }
 
 #[derive(Default)]
@@ -493,7 +519,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     };
 
     let mut sql = String::from(
-        "SELECT d.id, r.name, d.path FROM documents d \
+        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, '') FROM documents d \
          JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
     );
     let mut binds: Vec<String> = Vec::new();
@@ -507,16 +533,16 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     }
 
     let mut statement = store.db.prepare(&sql)?;
-    let rows: Vec<(i64, String, String)> = statement
+    let rows: Vec<(i64, String, String, String)> = statement
         .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<Result<_, _>>()?;
     drop(statement);
 
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _, path)| {
+        .filter(|(id, _, path, _)| {
             narrowed.as_ref().is_none_or(|set| set.contains(id))
                 && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
         })
@@ -536,7 +562,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
 
-    for (doc_id, repo, path) in rows {
+    for (doc_id, repo, path, commit_sha) in rows {
         if by_repo.get(&repo).is_some_and(|v| v.len() >= per_repo_cap) {
             continue;
         }
@@ -579,6 +605,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
                 line_number: number,
                 context: lines[low..high].iter().map(|s| s.to_string()).collect(),
                 scope: enclosing_scope(&lines, number),
+                commit_sha: commit_sha.clone(),
             });
             collected += 1;
             if bucket.len() >= per_repo_cap {
@@ -611,6 +638,31 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
 
 #[cfg(test)]
 mod tests {
+    /// Permalinks must only be offered when the stored hash is a real git
+    /// commit; our archive checksum is 64 hex characters and GitHub 404s on it.
+    #[test]
+    fn permalink_only_for_real_commits() {
+        let base = super::Match {
+            repo: "psf/requests".into(),
+            path: "src/requests/api.py".into(),
+            line_number: 14,
+            context: vec![],
+            scope: String::new(),
+            commit_sha: "5460f467b02e49471c0fd6cfc9ca0adab6351f98".into(),
+        };
+        assert_eq!(
+            base.permalink().unwrap(),
+            "https://github.com/psf/requests/blob/5460f467b02e49471c0fd6cfc9ca0adab6351f98/src/requests/api.py#L14"
+        );
+
+        // Archive ETag: 64 hex characters, not a commit.
+        let etag = super::Match {
+            commit_sha: "f6cd16327faa77e0f40488d4d4a1c218803857bf51eb34d73c06ac3cde2303b3".into(),
+            ..base
+        };
+        assert!(etag.permalink().is_none(), "offered a link that would 404");
+    }
+
     /// A search confined to one repository must still fill the requested
     /// limit; the fairness interleave is about spreading results, not about
     /// returning fewer of them.

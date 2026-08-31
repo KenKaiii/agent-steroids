@@ -143,6 +143,60 @@ pub fn get_json(url: &str) -> Result<String> {
         .read_to_string()?)
 }
 
+/// The commit a repository's HEAD points at, and its default branch.
+///
+/// Uses git's smart HTTP protocol rather than the REST API, which matters:
+/// this endpoint is not rate limited, so every repository can carry a real
+/// commit hash and therefore a permalink that will still resolve years from
+/// now. Asking the REST API for the same thing would cap a bulk ingest at 60
+/// repositories an hour.
+fn resolve_ref(repo: &str) -> Option<(String, String)> {
+    let url = format!("https://github.com/{repo}/info/refs?service=git-upload-pack");
+    let mut response = get(&url, "application/x-git-upload-pack-advertisement").ok()?;
+    // HEAD is advertised first, so a small prefix is enough. Read rather than
+    // limit: a repository with thousands of refs sends megabytes here, and a
+    // hard limit would fail instead of truncating.
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(8 * 1024)
+        .read_to_end(&mut body)
+        .ok()?;
+
+    // pkt-line framing: four hex digits of length, then the payload. The first
+    // ref advertised is HEAD, as "<sha> HEAD\0<capabilities>".
+    let mut offset = 0usize;
+    while offset + 4 <= body.len() {
+        let length =
+            usize::from_str_radix(std::str::from_utf8(&body[offset..offset + 4]).ok()?, 16).ok()?;
+        if length == 0 {
+            offset += 4;
+            continue;
+        }
+        if offset + length > body.len() {
+            break;
+        }
+        let payload = &body[offset + 4..offset + length];
+        if payload.len() > 45 && &payload[40..45] == b" HEAD" {
+            let sha = std::str::from_utf8(&payload[..40]).ok()?.to_string();
+            if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            // Capabilities carry symref=HEAD:refs/heads/<branch>.
+            let branch = std::str::from_utf8(payload)
+                .ok()
+                .and_then(|text| text.split("symref=HEAD:refs/heads/").nth(1))
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or("HEAD")
+                .to_string();
+            return Some((sha, branch));
+        }
+        offset += length;
+    }
+    None
+}
+
 /// Freshness facts, from the REST API.
 ///
 /// Only decay needs these, so ingest does not call this: the API allows 60
@@ -210,6 +264,13 @@ pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<P
         fallback()
     };
 
+    // Resolve the real commit so results can carry permalinks. Not fatal if it
+    // fails: codeload still serves HEAD, and links fall back to the branch.
+    if let Some((sha, branch)) = resolve_ref(&repo) {
+        upstream.commit_sha = sha;
+        upstream.branch = branch;
+    }
+
     let mut response = get(
         &format!(
             "https://codeload.github.com/{repo}/tar.gz/{}",
@@ -217,13 +278,18 @@ pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<P
         ),
         "application/octet-stream",
     )?;
-    upstream.commit_sha = response
-        .headers()
-        .get("etag")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .trim_matches(['"', 'W', '/'])
-        .to_string();
+    if upstream.commit_sha.is_empty() {
+        // No commit resolved, so fall back to the archive ETag. It identifies
+        // the snapshot for change detection but is not a git hash, so no
+        // permalink is offered for this repository.
+        upstream.commit_sha = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .trim_matches(['"', 'W', '/'])
+            .to_string();
+    }
     // Decode straight from the response body. Buffering the whole tarball
     // first would hold the compressed archive and the decoded files in memory
     // at the same time, and that doubling is multiplied by every parallel

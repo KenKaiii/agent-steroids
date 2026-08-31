@@ -14,6 +14,7 @@ pub fn render_matches_json(matches: &[Match], pattern: &str) -> String {
                 "repo": item.repo,
                 "path": item.path,
                 "line": item.line_number,
+                "url": item.permalink(),
                 "scope": item.scope,
                 "context": item.context,
             })
@@ -55,24 +56,35 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
 
 pub fn render_matches(matches: &[Match], header: &str) -> String {
     let mut out = String::from(header);
-    out.push_str("\n\n");
+    out.push('\n');
+
+    let mut last_file = String::new();
     for item in matches {
-        out.push_str(&format!(
-            "--- {}/{}:{}",
-            item.repo, item.path, item.line_number
-        ));
-        // The enclosing definition lets the agent skip irrelevant hits without
-        // paying to read the whole file.
+        let file = format!("{}/{}", item.repo, item.path);
+        // Consecutive hits in one file share a header rather than repeating
+        // the repository, path and link for each.
+        if file != last_file {
+            out.push_str(&format!("\nRepo: {}\n", item.repo));
+            out.push_str(&format!("File: {}\n", item.path));
+            if let Some(link) = item.permalink() {
+                out.push_str(&format!("Link: {link}\n"));
+            }
+            last_file = file;
+        }
+
+        // A gutter of real line numbers lets the agent cite an exact location
+        // and lets a person scroll straight to it.
+        out.push('\n');
         if !item.scope.is_empty() {
-            out.push_str(&format!("  [{}]", item.scope));
+            out.push_str(&format!("  in {}\n", item.scope));
         }
-        out.push('\n');
-        for line in &item.context {
-            out.push_str("    ");
-            out.push_str(line);
-            out.push('\n');
+        let start = item.context_start();
+        let width = (start + item.context.len()).to_string().len();
+        for (offset, line) in item.context.iter().enumerate() {
+            let number = start + offset;
+            let marker = if number == item.line_number { ">" } else { " " };
+            out.push_str(&format!("{marker} {number:>width$} \u{2502} {line}\n"));
         }
-        out.push('\n');
     }
     out
 }
