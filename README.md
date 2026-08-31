@@ -66,7 +66,7 @@ We throw away about 90% of every repo before storing it. No images, no docs, no 
 
 Those 40 repos were 382 MB of source. The code stores as 94 MB, and the rest is the search index that makes lookups instant.
 
-Searches come back in **5 to 30 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
+Searches come back in **under 10 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
 
 ## ⚡ Against the hosted alternatives
 
@@ -74,21 +74,23 @@ Same searches, run against tools that query public code over an API:
 
 | | Agent Steroids | Hosted code search |
 |---|---|---|
-| Plain search | **0.005s** | 2.3s |
-| Regex search | **0.026s** | 2.3s |
-| Find a definition | **0.008s** | 2.7s |
-| Rate limit | none | hit in seconds |
+| A search | **0.005s to 0.009s** | 2s to 40s |
+| Rate limit | none | hit within minutes |
 | Works offline | yes | no |
 | Repos searched | the ones you chose | whatever they index |
 
-That is **90 to 400 times faster**. Thirty lookups takes under a second instead
-of over a minute.
+Both measured the same way, on the same queries. Ours never left 9ms. Theirs
+usually came back in a couple of seconds, but a quarter of the queries took
+**25 to 42 seconds**, and that is the part that hurts: you cannot tell in
+advance which one you are getting.
 
-The rate limit matters even more than the speed. Testing this, one popular
-hosted search tool returned "too many requests" on the very **first** call and
-never recovered. That is fine when you look something up once. It falls apart
-when your agent wants thirty samples before writing a function, which is exactly
-what you want it doing.
+Thirty lookups is under a second here. Over there it is somewhere between a
+minute and twenty, if you do not get rate limited first.
+
+That rate limit matters more than the speed. Lean on a hosted tool for a few
+minutes and it starts refusing you. Fine when you look something up once. Not
+fine when your agent wants thirty samples before writing a function, which is
+exactly what you want it doing.
 
 ## 🚀 Get it
 
