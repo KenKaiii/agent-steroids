@@ -651,6 +651,21 @@ fn ingest_all(
         },
     )?;
 
+    // Refusing a file silently would leave the user believing they indexed
+    // something they did not, so always say what was dropped and why.
+    if !outcome.rejected.is_empty() {
+        eprintln!(
+            "\r  skipped {} file(s) containing hidden characters:",
+            outcome.rejected.len()
+        );
+        for path in outcome.rejected.iter().take(5) {
+            eprintln!("    {path}");
+        }
+        if outcome.rejected.len() > 5 {
+            eprintln!("    ...and {} more", outcome.rejected.len() - 5);
+        }
+    }
+
     if terse {
         eprint!("\r                                   \r");
         println!(

@@ -526,8 +526,12 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     // Documents come back grouped by repository, so taking the first N matches
     // would fill the whole budget from one project. The point of the corpus is
     // comparing how different projects solved the same thing, so collect per
-    // repo and interleave.
-    let per_repo_cap = (query.limit / 2).max(1);
+    // repo and interleave below.
+    //
+    // The per-repo ceiling is the full limit, not a fraction of it: fairness
+    // comes from the round-robin, and capping collection lower would silently
+    // return half a page when only one repository matches.
+    let per_repo_cap = query.limit.max(1);
     let mut by_repo: HashMap<String, Vec<Match>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
@@ -607,6 +611,28 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
 
 #[cfg(test)]
 mod tests {
+    /// A search confined to one repository must still fill the requested
+    /// limit; the fairness interleave is about spreading results, not about
+    /// returning fewer of them.
+    #[test]
+    fn single_repository_search_fills_the_limit() -> anyhow::Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            println!("SKIP: set STEROIDS_TEST_ROOT to a populated corpus");
+            return Ok(());
+        }
+        let mut store = crate::store::Store::open(std::path::Path::new(&root))?;
+        let repo = store.list_repos()?.first().map(|r| r.name.clone()).unwrap();
+        let query = super::Query {
+            repo: Some(&repo),
+            ..super::Query::new(6)
+        };
+        // A term common enough that the repository has more than six hits.
+        let hits = super::search(&mut store, "def ", &query)?;
+        assert_eq!(hits.len(), 6, "single-repo search returned a short page");
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

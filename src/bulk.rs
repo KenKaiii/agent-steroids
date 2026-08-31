@@ -31,6 +31,9 @@ pub struct BulkOutcome {
     pub failed: Vec<(String, String)>,
     pub files: usize,
     pub bytes: u64,
+    /// Files refused across the whole batch for carrying hidden characters,
+    /// prefixed with their repository.
+    pub rejected: Vec<String>,
 }
 
 /// Fetch every repository, writing each as it arrives.
@@ -52,6 +55,7 @@ pub fn ingest_all(
             failed: Vec::new(),
             files: 0,
             bytes: 0,
+            rejected: Vec::new(),
         });
     }
 
@@ -99,6 +103,7 @@ pub fn ingest_all(
             failed: Vec::new(),
             files: 0,
             bytes: 0,
+            rejected: Vec::new(),
         };
         let mut done = 0usize;
         for (name, prepared) in rx {
@@ -112,6 +117,9 @@ pub fn ingest_all(
                             outcome.added += 1;
                             outcome.files += repo.files.len();
                             outcome.bytes += repo.bytes_kept;
+                            outcome
+                                .rejected
+                                .extend(repo.rejected.iter().map(|path| format!("{name}/{path}")));
                             report(&name, Ok(&repo), done, total);
                         }
                         // One repository failing to write must not discard the
