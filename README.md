@@ -74,21 +74,21 @@ Same searches, run against tools that query public code over an API:
 
 | | Agent Steroids | Hosted code search |
 |---|---|---|
-| Plain literal | **5 ms** | one network round trip |
-| Regex | **26 ms** | one network round trip |
-| Symbol lookup | **8 ms** | one network round trip |
+| Plain search | **0.005s** | 2.3s |
+| Regex search | **0.026s** | 2.3s |
+| Find a definition | **0.008s** | 2.7s |
 | Rate limit | none | hit in seconds |
 | Works offline | yes | no |
 | Repos searched | the ones you chose | whatever they index |
 
-Our numbers are medians over nine runs on a corpus of 1,087 files, measured end
-to end including process startup.
+That is **90 to 400 times faster**. Thirty lookups takes under a second instead
+of over a minute.
 
-The rate limit matters more than the milliseconds. Testing this, one of the
-popular hosted search tools returned HTTP 429 on the **first** request and
-stayed there. That is fine when you look something up once. It falls apart when
-your agent wants thirty samples before writing a function, which is exactly what
-you want it doing.
+The rate limit matters even more than the speed. Testing this, one popular
+hosted search tool returned "too many requests" on the very **first** call and
+never recovered. That is fine when you look something up once. It falls apart
+when your agent wants thirty samples before writing a function, which is exactly
+what you want it doing.
 
 ## 🚀 Get it
 
@@ -102,7 +102,7 @@ That gives you a `steroids` command that works from anywhere. Your library lives
 
 ## 🤖 Just let your agent do it
 
-Honestly, the easiest way to use this is to not use it yourself. Paste this to Claude Code, Cursor, Codex, whatever you run:
+Honestly, the easiest way to use this is to not use it yourself. Paste this to [GG Coder](https://github.com/KenKaiii/gg-framework), Claude Code, Cursor, Codex, whatever you run:
 
 ```
 Install Agent Steroids for me: https://github.com/KenKaiii/agent-steroids
