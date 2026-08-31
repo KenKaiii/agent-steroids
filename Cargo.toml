@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 # let-chains (`if let ... && ...`) stabilised here; edition 2024 alone is 1.85.
 rust-version = "1.88"
+license = "MIT"
+description = "A local corpus of open-source code, searchable by you or your coding agent"
+repository = "https://github.com/KenKaiii/agent-steroids"
 
 [dependencies]
 anyhow = "1.0.104"
