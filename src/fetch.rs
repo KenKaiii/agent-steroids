@@ -362,7 +362,6 @@ mod tests {
 mod injection_tests {
     use super::*;
     use flate2::write::GzEncoder;
-    use std::io::Write;
 
     /// A file carrying hidden instructions must never enter the corpus, since
     /// everything stored here is read by an agent as if it were trustworthy.
