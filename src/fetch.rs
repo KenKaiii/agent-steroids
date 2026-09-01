@@ -4,6 +4,8 @@
 //! downloading one compressed snapshot beats cloning history we would discard.
 
 use std::io::Read;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use flate2::read::GzDecoder;
@@ -151,8 +153,27 @@ fn have_token() -> bool {
     std::env::var("GITHUB_TOKEN").is_ok_and(|token| !token.is_empty())
 }
 
+/// A server that accepts the connection and then stalls would otherwise block
+/// forever, and in a bulk ingest one such repository holds up the whole batch.
+/// Generous enough for a large archive on a slow line, short enough that a dead
+/// host is skipped rather than waited on.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .timeout_global(Some(RESPONSE_TIMEOUT))
+            .build()
+            .into()
+    })
+}
+
 fn get(url: &str, accept: &str) -> Result<ureq::http::Response<ureq::Body>> {
-    let mut request = ureq::get(url)
+    let mut request = agent()
+        .get(url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", accept);
     if let Ok(token) = std::env::var("GITHUB_TOKEN")
