@@ -310,7 +310,7 @@ steroids config min_stars 500    # change one
 | `auto_discover` | `false` | Top up with new repos on every update |
 | `discover_query` | `topic:ai-agents` | What to look for when discovering |
 | `discover_limit` | `25` | Cap on how many one discovery run adds |
-| `min_stars` | `100` | Skip anything below this |
+| `min_stars` | `500` | Skip anything below this |
 | `max_age_months` | `24` | Skip repos with no commits in N months. 0 accepts any age |
 
 Settings live inside the library itself, so they travel with it.
