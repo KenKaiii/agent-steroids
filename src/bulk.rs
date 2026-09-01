@@ -172,5 +172,8 @@ pub fn ingest_all(
     })?;
 
     store.flush_pending()?;
+    // Only now are the new documents' sizes known, so only now can the
+    // listing's per-repository numbers be recorded.
+    store.refresh_repo_stats(true)?;
     Ok(outcome)
 }

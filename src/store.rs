@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS postings (
 );
 ALTER TABLE postings ADD COLUMN doc_count INTEGER;
 ALTER TABLE repos ADD COLUMN language TEXT;
+ALTER TABLE repos ADD COLUMN files INTEGER;
+ALTER TABLE repos ADD COLUMN source_bytes INTEGER;
+ALTER TABLE repos ADD COLUMN disk_bytes INTEGER;
 ";
 
 /// What the corpus knows about one indexed repository.
@@ -251,6 +254,7 @@ impl Store {
              VALUES (?1, ?2, datetime('now'), ?3, ?4) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
              indexed_at = excluded.indexed_at, \
+             files = NULL, source_bytes = NULL, disk_bytes = NULL, \
              pushed_at = COALESCE(NULLIF(excluded.pushed_at, ''), pushed_at), \
              archived = CASE WHEN excluded.pushed_at <> '' \
                              THEN excluded.archived ELSE archived END",
@@ -486,18 +490,32 @@ impl Store {
         self.stop_trigrams = None;
     }
 
-    /// Record each repository's dominant language.
+    /// Record each repository's language, file count and sizes.
     ///
-    /// Called after an ingest rather than computed on every listing: it needs
-    /// a grouped scan over every document, which is far too slow to run for a
-    /// command as ordinary as `repos`.
-    pub fn refresh_languages(&mut self) -> Result<()> {
+    /// The listing reads these rather than deriving them: deriving meant
+    /// grouping every document in the corpus for a command as ordinary as
+    /// `repos`, 50ms here and seconds at 50,000 repositories. Ingest clears a
+    /// repository's numbers and refreshes only those (`missing_only`) once its
+    /// documents are flushed; an index run refreshes everything, which also
+    /// fills a corpus from before the columns existed.
+    pub fn refresh_repo_stats(&mut self, missing_only: bool) -> Result<()> {
         self.db.execute(
-            "UPDATE repos SET language = ( \
-                 SELECT language FROM documents \
-                 WHERE repo_id = repos.id AND offset >= 0 \
-                 GROUP BY language ORDER BY SUM(raw_size) DESC LIMIT 1 \
-             )",
+            &format!(
+                "UPDATE repos SET \
+                 language = ( \
+                     SELECT language FROM documents \
+                     WHERE repo_id = repos.id AND offset >= 0 \
+                     GROUP BY language ORDER BY SUM(raw_size) DESC LIMIT 1 \
+                 ), \
+                 files = (SELECT COUNT(*) FROM documents \
+                          WHERE repo_id = repos.id AND offset >= 0), \
+                 source_bytes = (SELECT COALESCE(SUM(raw_size), 0) FROM documents \
+                                 WHERE repo_id = repos.id AND offset >= 0), \
+                 disk_bytes = (SELECT COALESCE(SUM(length), 0) FROM documents \
+                               WHERE repo_id = repos.id AND offset >= 0) \
+                 {}",
+                if missing_only { "WHERE files IS NULL" } else { "" }
+            ),
             [],
         )?;
         Ok(())
@@ -707,28 +725,26 @@ impl Store {
     // -- browsing -----------------------------------------------------------
 
     pub fn list_repos(&self) -> Result<Vec<RepoSummary>> {
-        // The dominant language is stored on the repository, not derived here.
-        // Deriving it cost 142ms across 442 repositories, because a correlated
-        // subquery builds a temporary B-tree per repository and the grouped
-        // alternative scans every document. It changes only when a repository
-        // is re-ingested, so `refresh_languages` records it at index time.
-        //
-        // The subquery stays as a fallback for the two cases where nothing has
-        // recorded it yet: a corpus carried over from a build before the column
-        // existed, and a repository added but not yet indexed. COALESCE skips
-        // it entirely once the column is set, so a populated corpus pays
-        // nothing for it.
+        // Language, file count and sizes are stored on the repository, not
+        // derived here: see `refresh_repo_stats`. The subqueries are fallbacks
+        // for a row nothing has recorded yet, a corpus from before the columns
+        // existed or a repository whose ingest was interrupted, and COALESCE
+        // skips them entirely once the columns are set.
         let mut statement = self.db.prepare(
             "SELECT r.name, COALESCE(r.commit_sha, ''), COALESCE(r.indexed_at, ''), \
-             COUNT(d.id), COALESCE(SUM(d.raw_size), 0), COALESCE(SUM(d.length), 0), \
+             COALESCE(r.files, (SELECT COUNT(*) FROM documents \
+                                WHERE repo_id = r.id AND offset >= 0)), \
+             COALESCE(r.source_bytes, (SELECT COALESCE(SUM(raw_size), 0) FROM documents \
+                                       WHERE repo_id = r.id AND offset >= 0)), \
+             COALESCE(r.disk_bytes, (SELECT COALESCE(SUM(length), 0) FROM documents \
+                                     WHERE repo_id = r.id AND offset >= 0)), \
              COALESCE(r.pushed_at, ''), COALESCE(r.tags, ''), \
              COALESCE(r.language, ( \
                  SELECT language FROM documents \
                  WHERE repo_id = r.id AND offset >= 0 \
                  GROUP BY language ORDER BY SUM(raw_size) DESC LIMIT 1 \
              ), '-') \
-             FROM repos r LEFT JOIN documents d ON d.repo_id = r.id \
-             GROUP BY r.id ORDER BY r.name",
+             FROM repos r ORDER BY r.name",
         )?;
         let rows = statement
             .query_map([], |row| {

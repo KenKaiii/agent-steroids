@@ -264,7 +264,7 @@ fn build_from(
     transaction.commit()?;
     // The listing reads this rather than deriving it, and an index run is the
     // natural point to refresh it: the documents have just been read anyway.
-    store.refresh_languages()?;
+    store.refresh_repo_stats(false)?;
     store.invalidate_caches();
 
     let total = total as usize;
