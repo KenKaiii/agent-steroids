@@ -436,6 +436,19 @@ impl Store {
     /// file grows without bound across updates. Returns bytes reclaimed.
     pub fn compact(&mut self) -> Result<u64> {
         self.flush_pending()?;
+        // Open the source explicitly rather than reusing the cached handle.
+        // That handle may already refer to a file this process renamed away in
+        // an earlier compaction, in which case the reads below fail after the
+        // transaction has committed, leaving offsets that describe a file that
+        // no longer exists. That is what corrupts a corpus beyond repair.
+        self.reader = None;
+        self.writer = None;
+        let mut source = match File::open(&self.blob_path) {
+            Ok(file) => file,
+            // Nothing stored yet, so nothing to reclaim.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
         let before = std::fs::metadata(&self.blob_path)
             .map(|m| m.len())
             .unwrap_or(0);
@@ -463,16 +476,23 @@ impl Store {
                 params![doc_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
-            let reader = self.reader.get_or_insert(File::open(&self.blob_path)?);
-            reader.seek(SeekFrom::Start(old_offset as u64))?;
+            source.seek(SeekFrom::Start(old_offset as u64))?;
             let mut packed = vec![0u8; length as usize];
-            reader.read_exact(&mut packed)?;
+            source.read_exact(&mut packed).with_context(|| {
+                format!(
+                    "reading document {doc_id} at offset {old_offset} while compacting; \
+                     the corpus was left untouched"
+                )
+            })?;
             output.write_all(&packed)?;
             moves.push((doc_id, offset, packed.len()));
             offset += packed.len() as u64;
         }
         output.sync_all()?;
         drop(output);
+        // Every byte is now in the new file. Only past this point does the
+        // database start describing it.
+        drop(source);
 
         let transaction = self.db.unchecked_transaction()?;
         for (doc_id, new_offset, length) in moves {
@@ -487,9 +507,6 @@ impl Store {
         )?;
         transaction.commit()?;
 
-        // Handles must close before the file they point at is replaced.
-        self.reader = None;
-        self.writer = None;
         std::fs::rename(&temporary, &self.blob_path)?;
         self.db.execute_batch("VACUUM")?;
         Ok(before.saturating_sub(offset))
@@ -927,6 +944,45 @@ mod tests {
             store.list_repos()?.is_empty(),
             "a repository with no content was still listed"
         );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// Compaction must never commit new offsets it cannot back with data.
+    ///
+    /// The real failure: the source handle was cached from before an earlier
+    /// compaction renamed the file away, so reads failed with "No such file or
+    /// directory" after the transaction had committed. The database then
+    /// described a file that did not exist and every document became
+    /// unreadable.
+    #[test]
+    fn compaction_leaves_the_corpus_readable() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-compact2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let payload = b"fn main() { println!(\"hi\"); }\n".repeat(30);
+        let mut store = Store::open_for_write(&dir)?;
+        let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        let ids: Vec<i64> = (0..15)
+            .map(|i| store.add_document(repo, &format!("f{i}.rs"), "rust", payload.clone()))
+            .collect::<Result<_>>()?;
+        store.flush_pending()?;
+
+        // Repeated compaction in one process is what exposed the stale handle.
+        for round in 0..3 {
+            store.compact()?;
+            for id in &ids {
+                let content = store.read_document(*id).with_context(|| {
+                    format!("document {id} unreadable after compaction {round}")
+                })?;
+                assert_eq!(content, payload, "document {id} changed under compaction");
+            }
+        }
+
+        // And still readable to a fresh process.
+        let mut reopened = Store::open(&dir)?;
+        assert_eq!(reopened.read_document(ids[0])?, payload);
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())
