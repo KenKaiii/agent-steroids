@@ -128,7 +128,8 @@ I have a local corpus of real open source code at ~/.steroids. Search it
 before writing anything non-trivial, to see how other projects solved the
 same problem.
 
-  steroids search '<regex>' [--tag T] [--repo R] [--language L] [--limit N] [-C lines]
+  steroids search '<regex>' [--tag T] [--repo R] [--language L] [--limit N]
+                            [-C lines] [--per-repo N]
   steroids define <Symbol>       where something is defined
   steroids show <repo> <path>    read a full file
   steroids repos                 what is indexed

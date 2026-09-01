@@ -85,6 +85,11 @@ pub struct Query<'a> {
     pub path_glob: Option<&'a str>,
     pub ignore_case: bool,
     pub skip_comments: bool,
+    /// Most results to take from any one repository. Lowering it trades depth
+    /// for breadth, which is what someone comparing how several projects
+    /// solved a problem actually wants: ten projects once each says more than
+    /// three projects three times each.
+    pub per_repo: Option<usize>,
     pub context_lines: usize,
     pub limit: usize,
 }
@@ -734,7 +739,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     // The per-repo ceiling is the full limit, not a fraction of it: fairness
     // comes from the round-robin, and capping collection lower would silently
     // return half a page when only one repository matches.
-    let per_repo_cap = query.limit.max(1);
+    let per_repo_cap = query.per_repo.unwrap_or(query.limit).max(1);
     let mut by_repo: HashMap<String, Vec<Match>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
@@ -795,7 +800,14 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         // Gather several times the limit so ranking and the round-robin have
         // something to choose from, then stop. Saturating because a caller
         // asking for a very large limit would otherwise overflow.
-        if collected >= query.limit.saturating_mul(4) {
+        // With a per-repo cap the budget has to cover many more repositories,
+        // since each contributes only a little. Without this the scan stops
+        // after a handful and the breadth is never found.
+        let budget = match query.per_repo {
+            Some(cap) => query.limit.saturating_mul(cap.max(1)).saturating_mul(8),
+            None => query.limit.saturating_mul(4),
+        };
+        if collected >= budget {
             // Stopped early, so more matches exist beyond what was gathered.
             truncated = true;
             break;
@@ -853,6 +865,36 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
 #[cfg(test)]
 mod tests {
+    /// Comparing how several projects solved a problem needs breadth, not
+    /// depth: ten projects once each says more about common practice than
+    /// three projects three times each.
+    #[test]
+    fn per_repo_cap_trades_depth_for_breadth() -> anyhow::Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            println!("SKIP: set STEROIDS_TEST_ROOT to a populated corpus");
+            return Ok(());
+        }
+        let mut store = crate::store::Store::open(std::path::Path::new(&root))?;
+
+        let wide = super::search(
+            &mut store,
+            "def ",
+            &super::Query {
+                per_repo: Some(1),
+                ..super::Query::new(10)
+            },
+        )?;
+        let repos: std::collections::HashSet<_> = wide.matches.iter().map(|m| &m.repo).collect();
+        assert_eq!(
+            repos.len(),
+            wide.matches.len(),
+            "per_repo=1 returned a repository more than once"
+        );
+        assert!(repos.len() >= 5, "only {} repositories found", repos.len());
+        Ok(())
+    }
+
     /// The gutter must number the lines it actually shows. Deriving the start
     /// from a fixed default silently misnumbered every result whenever the
     /// caller asked for a different context width, so `>` pointed at the wrong
@@ -1033,12 +1075,21 @@ mod tests {
             return Ok(());
         }
         let mut store = crate::store::Store::open(std::path::Path::new(&root))?;
-        let repo = store.list_repos()?.first().map(|r| r.name.clone()).unwrap();
+        // Pick a repository that actually contains the term, rather than
+        // whichever sorts first: the test is about the page being full, not
+        // about what happens to be indexed.
+        let Some(repo) = super::search(&mut store, "def ", &super::Query::new(1))?
+            .matches
+            .first()
+            .map(|hit| hit.repo.clone())
+        else {
+            println!("SKIP: corpus has no Python-like code");
+            return Ok(());
+        };
         let query = super::Query {
             repo: Some(&repo),
             ..super::Query::new(6)
         };
-        // A term common enough that the repository has more than six hits.
         let hits = super::search(&mut store, "def ", &query)?;
         assert_eq!(hits.len(), 6, "single-repo search returned a short page");
         Ok(())

@@ -85,6 +85,11 @@ enum Command {
         /// how several projects implement the same thing.
         #[arg(short = 'C', long, default_value_t = search::DEFAULT_CONTEXT_LINES)]
         context: usize,
+        /// Most results to take from any one repository. Use 1 to see how many
+        /// different projects solve something, rather than one project many
+        /// times.
+        #[arg(long)]
+        per_repo: Option<usize>,
         #[arg(long, default_value_t = 20)]
         limit: usize,
         /// Emit JSON instead of text
@@ -402,6 +407,7 @@ fn main() -> Result<()> {
             ignore_case,
             include_comments,
             context,
+            per_repo,
             limit,
             json,
         } => {
@@ -414,6 +420,7 @@ fn main() -> Result<()> {
                 skip_comments: !include_comments,
                 // Capped: a huge value would paste whole files into a reply.
                 context_lines: context.min(40),
+                per_repo,
                 ..Query::new(limit)
             };
             // A filter that excludes everything is not a failed search, and
