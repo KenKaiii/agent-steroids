@@ -384,7 +384,7 @@ fn branch_candidates(
     store: &Store,
     branch: &str,
     fold: Option<&HashSet<[u8; 3]>>,
-) -> Result<Option<HashSet<i64>>> {
+) -> Result<Option<Vec<i64>>> {
     let runs = literals(branch);
     if runs.is_empty() {
         return Ok(None);
@@ -434,7 +434,12 @@ fn branch_candidates(
     // slower: even a list covering a fifth of the corpus removes candidates
     // the regex pass would otherwise have to read. Decode them all, smallest
     // first, and stop early once the set is small enough.
-    let mut best: Option<HashSet<i64>> = None;
+    // Sorted vectors throughout, never hash sets. A posting list decodes
+    // sorted, so intersection is a merge, and a list of ids costs 8 bytes
+    // each instead of the 40 or so a hash set spends: a trigram in 30% of a
+    // 50,000-repository corpus is 21 million ids, which is 170MB this way and
+    // closer to a gigabyte the other.
+    let mut best: Option<Vec<i64>> = None;
     for (variants, _) in sized {
         let mut ids: Vec<i64> = Vec::new();
         for variant in &variants {
@@ -442,25 +447,17 @@ fn branch_candidates(
                 ids.extend(list);
             }
         }
+        if variants.len() > 1 {
+            // Several variants concatenated are no longer in order.
+            ids.sort_unstable();
+            ids.dedup();
+        }
         best = Some(match best {
-            None => ids.into_iter().collect(),
-            Some(previous) => {
-                // Walk the smaller side, not the freshly decoded one.
-                let ids: HashSet<i64> = ids.into_iter().collect();
-                let (small, large) = if previous.len() <= ids.len() {
-                    (&previous, &ids)
-                } else {
-                    (&ids, &previous)
-                };
-                small
-                    .iter()
-                    .filter(|id| large.contains(id))
-                    .copied()
-                    .collect()
-            }
+            None => ids,
+            Some(previous) => intersect_sorted(&previous, &ids),
         });
         match best.as_ref() {
-            Some(set) if set.is_empty() => return Ok(Some(HashSet::new())),
+            Some(set) if set.is_empty() => return Ok(Some(Vec::new())),
             // Already narrow enough that further intersection costs more than
             // the regex pass it would save.
             Some(set) if set.len() <= NARROW_ENOUGH => break,
@@ -468,6 +465,24 @@ fn branch_candidates(
         }
     }
     Ok(best)
+}
+
+/// Ids present in both sorted lists, in order.
+fn intersect_sorted(a: &[i64], b: &[i64]) -> Vec<i64> {
+    let mut out = Vec::with_capacity(a.len().min(b.len()));
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
 }
 
 /// How many documents a posting list holds, without decoding it.
@@ -488,7 +503,7 @@ fn posting_size(store: &Store, gram: &[u8; 3]) -> Result<Option<i64>> {
         .ok())
 }
 
-fn candidates(store: &mut Store, pattern: &str, fold: bool) -> Result<Option<HashSet<i64>>> {
+fn candidates(store: &mut Store, pattern: &str, fold: bool) -> Result<Option<Vec<i64>>> {
     // Folding needs to tell a variant that never occurs from one dropped as
     // too common. An index that predates stop-list tracking cannot, so the
     // only safe answer there is to scan.
@@ -500,7 +515,7 @@ fn candidates(store: &mut Store, pattern: &str, fold: bool) -> Result<Option<Has
     } else {
         None
     };
-    let mut combined = HashSet::new();
+    let mut combined: Vec<i64> = Vec::new();
     for branch in alternatives(pattern) {
         match branch_candidates(store, &branch, stop.as_ref())? {
             // This branch could match anything, so narrowing would lose results.
@@ -508,6 +523,8 @@ fn candidates(store: &mut Store, pattern: &str, fold: bool) -> Result<Option<Has
             Some(found) => combined.extend(found),
         }
     }
+    combined.sort_unstable();
+    combined.dedup();
     Ok(Some(combined))
 }
 
@@ -524,14 +541,13 @@ fn fragment_present(store: &mut Store, run: &str) -> Result<bool> {
     }
     grams.sort_unstable();
 
-    let mut narrowed: Option<HashSet<i64>> = None;
+    let mut narrowed: Option<Vec<i64>> = None;
     for gram in grams {
         match posting(store, &gram)? {
             Some(ids) => {
-                let ids: HashSet<i64> = ids.into_iter().collect();
                 narrowed = Some(match narrowed {
                     None => ids,
-                    Some(previous) => previous.intersection(&ids).copied().collect(),
+                    Some(previous) => intersect_sorted(&previous, &ids),
                 });
                 if narrowed.as_ref().is_some_and(|set| set.is_empty()) {
                     return Ok(false);
@@ -553,9 +569,7 @@ fn fragment_present(store: &mut Store, run: &str) -> Result<bool> {
     let Some(narrowed) = narrowed else {
         return Ok(true);
     };
-    let mut ids: Vec<i64> = narrowed.into_iter().collect();
-    ids.sort_unstable();
-    for doc_id in ids.into_iter().take(FRAGMENT_CONFIRM_LIMIT) {
+    for doc_id in narrowed.into_iter().take(FRAGMENT_CONFIRM_LIMIT) {
         // These ids come from the trigram index, which an update leaves
         // pointing at documents that have been replaced. A stale entry is
         // expected until the index is rebuilt, so skip it.
@@ -932,7 +946,7 @@ fn streamed_candidates(
     store: &Store,
     filtered_sql: &str,
     binds: &[String],
-    ids: &HashSet<i64>,
+    ids: &[i64],
 ) -> Result<(Vec<i64>, bool)> {
     let mut statement = store
         .db
@@ -943,7 +957,7 @@ fn streamed_candidates(
     let mut rows = statement.query(rusqlite::params_from_iter(binds.iter()))?;
     while let Some(row) = rows.next()? {
         let (id, repo_id): (i64, i64) = (row.get(0)?, row.get(1)?);
-        if !ids.contains(&id) {
+        if ids.binary_search(&id).is_err() {
             continue;
         }
         let bucket = per_repo.entry(repo_id).or_insert_with(|| {
@@ -1084,9 +1098,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     match narrowed.as_ref() {
         None => {}
         Some(ids) if ids.len() <= SQL_ID_LIMIT => {
-            let mut sorted: Vec<i64> = ids.iter().copied().collect();
-            sorted.sort_unstable();
-            let list: Vec<String> = sorted.iter().map(i64::to_string).collect();
+            let list: Vec<String> = ids.iter().map(i64::to_string).collect();
             // Values come from the index, not from user input, so they are
             // integers by construction and safe to inline.
             inline_ids = Some(list.join(","));
@@ -1607,6 +1619,13 @@ mod tests {
         assert!(case_variants(b"ISO").is_none());
         // A non-ASCII letter changes its bytes when it changes case.
         assert!(case_variants("é_x".as_bytes()[..3].try_into().unwrap()).is_none());
+    }
+
+    #[test]
+    fn sorted_intersection_keeps_only_shared_ids_in_order() {
+        assert_eq!(intersect_sorted(&[1, 3, 5, 7, 9], &[2, 3, 7, 10]), vec![3, 7]);
+        assert_eq!(intersect_sorted(&[], &[1, 2]), Vec::<i64>::new());
+        assert_eq!(intersect_sorted(&[4], &[4]), vec![4]);
     }
 
     #[test]
