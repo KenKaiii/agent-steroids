@@ -660,10 +660,13 @@ pub fn diagnose(store: &mut Store, pattern: &str) -> Result<Facts> {
         });
     }
 
+    // Counted over repositories, not documents: the message says how many
+    // repositories the corpus holds, and grouping every document by language
+    // instead cost 109ms of a diagnosis that should be instant.
     let languages: Vec<String> = store
         .db
         .prepare(
-            "SELECT language, COUNT(*) c FROM documents WHERE offset >= 0 \
+            "SELECT language, COUNT(*) c FROM repos WHERE language IS NOT NULL \
              GROUP BY language ORDER BY c DESC LIMIT 6",
         )?
         .query_map([], |row| row.get(0))?
