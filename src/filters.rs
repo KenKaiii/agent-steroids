@@ -161,11 +161,34 @@ fn is_hostile(c: char) -> bool {
 /// run is steganography, since hiding even a short sentence this way takes
 /// well over a hundred of them.
 fn is_zero_width(c: char) -> bool {
-    matches!(c,
-        '\u{200B}'..='\u{200F}'
-        | '\u{2060}'..='\u{2064}'
-        | '\u{00AD}'
-        | '\u{FEFF}'
+    matches!(
+        c,
+        // Zero-width space. Invisible with no role in shaping text, so a run
+        // of them is steganography rather than typography.
+        '\u{200B}'
+        // Word joiner and the invisible maths operators.
+        | '\u{2060}'..='\u{2064}' | '\u{00AD}' | '\u{FEFF}'
+    )
+}
+
+/// Invisible characters that real text cannot do without.
+///
+/// U+200D joins emoji into sequences: a family emoji is several people glued
+/// together with it, and `faker`'s emoji provider holds 1,739 of them. U+200C
+/// keeps Persian and Arabic letters apart, where joining them changes the word.
+/// The directional marks order mixed left-to-right and right-to-left text.
+///
+/// None of these can carry a readable payload on their own the way tag
+/// characters can, and rejecting files for containing them means refusing to
+/// index emoji handling and every right-to-left locale. That is a worse
+/// outcome than the marginal risk they pose.
+fn is_text_shaping(c: char) -> bool {
+    matches!(
+        c,
+        // Zero-width non-joiner and joiner.
+        '\u{200C}' | '\u{200D}'
+        // Left-to-right and right-to-left marks.
+        | '\u{200E}' | '\u{200F}'
     )
 }
 
@@ -190,6 +213,10 @@ pub fn has_hidden_characters(content: &str) -> bool {
     for c in content.chars() {
         if is_hostile(c) {
             return true;
+        }
+        // Load-bearing in emoji and right-to-left text, so never counted.
+        if is_text_shaping(c) {
+            continue;
         }
         if is_zero_width(c) {
             zero_width += 1;
@@ -242,6 +269,44 @@ mod tests {
         // Enough zero-width characters to carry a payload.
         let payload = "\u{200B}".repeat(200);
         assert!(has_hidden_characters(&format!("let x = 1; // {payload}")));
+    }
+
+    /// Emoji and right-to-left text are built from invisible characters, and
+    /// rejecting files that contain them means refusing to index emoji
+    /// handling and every RTL locale. Real cases: faker's emoji provider holds
+    /// 1,739 zero-width joiners, and its Persian locales use the non-joiner to
+    /// keep letters apart.
+    #[test]
+    fn keeps_emoji_and_right_to_left_text() {
+        // A family emoji: several people joined with U+200D.
+        let family = "EMOJI = ['\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}']";
+        assert!(!has_hidden_characters(family), "rejected an emoji sequence");
+
+        // Many of them, as a real emoji provider has.
+        let many = format!("EMOJI = [{}]", "'\u{1f468}\u{200d}\u{1f469}',".repeat(500));
+        assert!(!has_hidden_characters(&many), "rejected an emoji provider");
+
+        // Persian with the non-joiner, which changes the word without it.
+        let persian = "COLORS = ['\u{646}\u{627}\u{631}\u{646}\u{62c}\u{200c}\u{6cc}']";
+        assert!(!has_hidden_characters(persian), "rejected Persian text");
+
+        // Directional marks ordering mixed text.
+        let mixed = "LABEL = '\u{200f}\u{639}\u{631}\u{628}\u{6cc}\u{200e} (Arabic)'";
+        assert!(
+            !has_hidden_characters(mixed),
+            "rejected mixed direction text"
+        );
+
+        // The genuinely hostile characters must still be caught, even when
+        // they sit beside legitimate emoji.
+        let smuggled = format!(
+            "EMOJI = '\u{1f468}\u{200d}\u{1f469}' # {}",
+            "\u{e0041}".repeat(3)
+        );
+        assert!(
+            has_hidden_characters(&smuggled),
+            "tag characters slipped through beside emoji"
+        );
     }
 
     #[test]
