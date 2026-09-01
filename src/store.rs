@@ -132,9 +132,17 @@ impl Store {
             .with_context(|| format!("creating corpus directory {}", root.display()))?;
         // Taken before anything is read, and released when the Store drops.
         let lock = if for_write {
+            // Read and write, not append: Windows refuses LockFileEx on an
+            // append-only handle with "Access is denied", and the file is
+            // never written to anyway. Its existence is the whole point.
             let file = OpenOptions::new()
                 .create(true)
-                .append(true)
+                .read(true)
+                .write(true)
+                // Never truncated: another process may be holding a lock on
+                // this very file, and emptying it under them is pointless
+                // since nothing is ever stored in it.
+                .truncate(false)
                 .open(root.join("write.lock"))?;
             lock_exclusive(&file)?;
             Some(file)

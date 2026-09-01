@@ -177,7 +177,9 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("steroids-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
-        let store = Store::open(&directory)?;
+        // Writing settings, so open for write: a read-only handle cannot take
+        // the corpus lock and on Windows cannot write at all.
+        let store = Store::open_for_write(&directory)?;
 
         let mut config = Config::default();
         config.set("decay_months", "6")?;
