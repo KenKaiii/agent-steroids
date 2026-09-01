@@ -524,7 +524,11 @@ impl Store {
                  disk_bytes = (SELECT COALESCE(SUM(length), 0) FROM documents \
                                WHERE repo_id = repos.id AND offset >= 0) \
                  {}",
-                if missing_only { "WHERE files IS NULL" } else { "" }
+                if missing_only {
+                    "WHERE files IS NULL"
+                } else {
+                    ""
+                }
             ),
             [],
         )?;
@@ -587,9 +591,9 @@ impl Store {
             })?;
             // A full disk fails here, before the database has been touched.
             // The partial file is removed by the next writer to open.
-            output.write_all(&packed).context(
-                "writing the compacted blob file; the corpus was left untouched",
-            )?;
+            output
+                .write_all(&packed)
+                .context("writing the compacted blob file; the corpus was left untouched")?;
             moves.push((doc_id, offset, packed.len()));
             offset += packed.len() as u64;
         }

@@ -1642,7 +1642,10 @@ mod tests {
 
     #[test]
     fn sorted_intersection_keeps_only_shared_ids_in_order() {
-        assert_eq!(intersect_sorted(&[1, 3, 5, 7, 9], &[2, 3, 7, 10]), vec![3, 7]);
+        assert_eq!(
+            intersect_sorted(&[1, 3, 5, 7, 9], &[2, 3, 7, 10]),
+            vec![3, 7]
+        );
         assert_eq!(intersect_sorted(&[], &[1, 2]), Vec::<i64>::new());
         assert_eq!(intersect_sorted(&[4], &[4]), vec![4]);
     }
