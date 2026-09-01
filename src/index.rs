@@ -152,12 +152,17 @@ const FLUSH_THRESHOLD: usize = 128_000_000;
 /// next run straight back to a full rebuild: a corpus too large to index in one
 /// sitting would restart forever rather than resume. Nothing is stale once the
 /// postings are gone.
+///
+/// doc_count is what the next run measures staleness against. Left at the old
+/// total, a resumed rebuild counted every document it had not yet reached as
+/// dead, set its too-common cutoff against that inflated figure, and kept 78
+/// trigrams a clean rebuild drops. Recall was unaffected; the index was larger.
 fn clear_index(store: &Store) -> Result<()> {
     let transaction = store.db.unchecked_transaction()?;
     transaction.execute("DELETE FROM postings", [])?;
     transaction.execute(
         "INSERT OR REPLACE INTO meta (key, value) \
-         VALUES ('indexed_upto', ?1), ('stale_postings', ?1)",
+         VALUES ('indexed_upto', ?1), ('stale_postings', ?1), ('doc_count', ?1)",
         params![b"0".to_vec()],
     )?;
     transaction.commit()?;
@@ -495,6 +500,7 @@ mod tests {
 
         assert_eq!(read_marker(&store, "indexed_upto")?, 0);
         assert_eq!(read_marker(&store, "stale_postings")?, 0);
+        assert_eq!(read_marker(&store, "doc_count")?, 0);
 
         // A rebuild from that state still produces a working index.
         super::rebuild(&mut store, &mut noop)?;
