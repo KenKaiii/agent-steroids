@@ -62,7 +62,7 @@ ok "config bad number"      1 "whole number"               -- "$BIN" config deca
 ok "config bad boolean"     1 "true or false"              -- "$BIN" config decay_archived maybe
 ok "config empty query"     1 "cannot be empty"            -- "$BIN" config discover_query ""
 ok "unknown tag on search"  0 "no repositories are tagged" -- "$BIN" search x --tag ghost
-ok "tag an unknown repo"    0 "not in corpus"              -- "$BIN" tag --add x ghost/repo
+ok "tag an unknown repo"       1 "not in corpus"              -- "$BIN" tag --add x ghost/repo
 
 echo
 echo "=== a real repository, end to end ==="
@@ -76,6 +76,16 @@ ok "repos shows the language"  0 "c "            -- "$BIN" repos
 # merely absent. Saying "add more repositories" here sends agents chasing
 # repositories that would never have helped.
 ok "newline pattern explained" 0 "one line at a time" -- "$BIN" search 'try:\n' 
+# Inputs an agent will eventually send by accident. Each used to succeed
+# quietly or, for the reversed range, panic.
+ok "empty pattern refused"     1 "must not be empty" -- "$BIN" search ""
+ok "empty symbol refused"      1 "must not be empty" -- "$BIN" define ""
+ok "reversed range refused"    1 "before --from"     -- "$BIN" show antirez/smallchat chatlib.c --from 50 --to 10
+ok "show limit 0 refused"      1 "at least 1"        -- "$BIN" show antirez/smallchat chatlib.c --limit 0
+ok "empty tag refused"         1 "must not be empty" -- "$BIN" tag antirez/smallchat --add ""
+ok "spaced tag refused"        1 "spaces or commas"  -- "$BIN" tag antirez/smallchat --add "a b"
+ok "tagging nothing fails"     1 "not in corpus"     -- "$BIN" tag nope/nope --add x
+ok "deep bare path refused"    1 "expected owner/name" -- "$BIN" add owner/repo/extra
 ok "repos --json"              0 '"repo"'        -- "$BIN" repos --json
 ok "files"                     0 "chat"          -- "$BIN" files antirez/smallchat
 ok "search finds code"         0 "match"         -- "$BIN" search "int main" --limit 2

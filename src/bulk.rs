@@ -21,6 +21,14 @@ pub const DEFAULT_PARALLEL: usize = 8;
 /// Prepared repositories held in memory awaiting the writer. Each is a decoded
 /// repository's worth of source, so this bounds peak memory alongside the
 /// worker count: roughly (parallel + QUEUE_DEPTH) repositories in flight.
+///
+/// simplification: the bound is in repositories, not bytes, so the ceiling is
+/// that many copies of the largest repository's kept source. Measured at 1.2GB
+/// with the ten largest in the corpus (nodejs/node, ccxt, kotlin) ingested
+/// together; a typical batch sits far below that, and it does not grow with
+/// the corpus. The upgrade is compressing on the worker threads once a
+/// dictionary exists, roughly a fivefold cut, at the cost of a second write
+/// path in the store.
 const QUEUE_DEPTH: usize = 2;
 
 /// Called as each repository lands: (name, result, done, total).

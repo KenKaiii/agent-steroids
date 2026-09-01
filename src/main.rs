@@ -18,7 +18,7 @@ mod tui;
 use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
 use render::{render_empty, render_matches};
@@ -545,6 +545,9 @@ fn main() -> Result<()> {
             limit,
             json,
         } => {
+            if symbol.trim().is_empty() {
+                bail!("symbol must not be empty");
+            }
             let escaped = regex::escape(&symbol);
             // Definition syntax across the indexed languages, widest first.
             // A definition is the keyword, then the name as a whole word. The
@@ -598,6 +601,12 @@ fn main() -> Result<()> {
                 let text = String::from_utf8_lossy(&content);
                 let lines: Vec<&str> = text.lines().collect();
                 let start = from.unwrap_or(1).max(1);
+                if limit == 0 {
+                    bail!("--limit must be at least 1");
+                }
+                if to.is_some_and(|to| to < start) {
+                    bail!("--to ({}) is before --from ({start})", to.unwrap_or(0));
+                }
                 // A range around a known line is the common case, so default
                 // to a window rather than the rest of the file.
                 let end = to
@@ -957,12 +966,19 @@ fn main() -> Result<()> {
         }
 
         Command::Tag { add, repos } => {
-            // A tag that is only whitespace stores nothing, so reporting
-            // success would be a lie.
-            let add: Vec<String> = add
-                .into_iter()
-                .filter(|tag| !tag.trim().is_empty())
-                .collect();
+            // A tag is a single token: it is passed back through --tag on the
+            // shell, and a space or comma inside one would either split it
+            // there or need quoting nobody will remember. Whitespace-only is
+            // the common accident (`--add ""`), and storing nothing while
+            // reporting success would be a lie.
+            for tag in &add {
+                if tag.trim().is_empty() {
+                    bail!("tag must not be empty");
+                }
+                if tag.chars().any(|c| c.is_whitespace() || c == ',') {
+                    bail!("tag {tag:?} must not contain spaces or commas");
+                }
+            }
             if add.is_empty() {
                 let counts = store.tag_counts()?;
                 if counts.is_empty() {
@@ -983,14 +999,21 @@ fn main() -> Result<()> {
                     .collect::<Result<_>>()?
             };
             let mut tagged = 0;
+            let mut missing = 0;
             for name in &targets {
                 if store.tag_repo(name, &add)? {
                     tagged += 1;
                 } else {
+                    missing += 1;
                     eprintln!("  not in corpus: {name}");
                 }
             }
             println!("  tagged {tagged} repositories: {}", add.join(", "));
+            // A caller that named repositories and reached none of them did not
+            // get what it asked for, and exit 0 would say it had.
+            if missing > 0 && tagged == 0 {
+                std::process::exit(1);
+            }
         }
 
         Command::Compact => {

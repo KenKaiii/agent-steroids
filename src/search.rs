@@ -898,6 +898,12 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     if query.limit == 0 {
         bail!("limit must be at least 1");
     }
+    // An empty pattern matches every line of every document. Twenty arbitrary
+    // lines is never what was wanted, and a caller that built the pattern from
+    // a variable has a bug this makes visible.
+    if pattern.is_empty() {
+        bail!("pattern must not be empty");
+    }
     let matcher = RegexBuilder::new(pattern)
         .case_insensitive(query.ignore_case)
         .build()
