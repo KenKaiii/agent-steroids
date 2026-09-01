@@ -59,7 +59,7 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
     },
-    /// Build the trigram index. Run after any add.
+    /// Bring the trigram index up to date. Runs by itself after every add, update and remove; use --rebuild to start it over.
     Index {
         /// Discard the existing index and rebuild from scratch. Only needed if
         /// the index is suspect; ordinary runs extend it in place.

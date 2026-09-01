@@ -276,7 +276,7 @@ pub fn render_empty(facts: &Facts) -> String {
              Offer to fill it: look at what the user is building, run \
              `steroids discover '<topic>' --limit 20` to find well starred, actively \
              maintained projects that solve similar problems, then \
-             `steroids add <repos> && steroids index` once they agree."
+             `steroids add <repos>` once they agree."
             .to_string(),
         Diagnosis::NearMiss { missing, nearest } => format!(
             "No matches for '{missing}', but the corpus does contain '{nearest}'. {scope} \
