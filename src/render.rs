@@ -54,6 +54,24 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
 }
 
+/// A repository with no commit in this long is worth flagging: its patterns may
+/// predate current practice in a field that moves quickly.
+const STALE_AFTER_DAYS: u64 = 365;
+
+/// Whether an ISO date is older than the staleness threshold.
+fn is_stale(pushed_at: &str) -> bool {
+    if pushed_at.len() < 10 {
+        // Unknown, so say nothing rather than implying it is fresh or stale.
+        return false;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cutoff = crate::discover::iso_date(now.saturating_sub(STALE_AFTER_DAYS * 86_400));
+    &pushed_at[..10] < cutoff.as_str()
+}
+
 pub fn render_matches(matches: &[Match], header: &str) -> String {
     let mut out = String::from(header);
     out.push('\n');
@@ -73,7 +91,27 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
 
     for key in order {
         let items = &grouped[&key];
-        out.push_str(&format!("\nRepo: {}\n", key.0));
+        // Flag stale sources inline. A pattern from a project that stopped
+        // moving years ago may well be out of date, and the reader cannot know
+        // that from the snippet alone.
+        let stale = items
+            .first()
+            .map(|item| is_stale(&item.pushed_at))
+            .unwrap_or(false);
+        out.push_str(&format!(
+            "\nRepo: {}{}\n",
+            key.0,
+            if stale { "  (last commit " } else { "" }
+        ));
+        if stale {
+            // Close the marker with the actual date, so it is checkable.
+            let date = items
+                .first()
+                .map(|i| i.pushed_at.chars().take(10).collect::<String>())
+                .unwrap_or_default();
+            out.truncate(out.len() - 1);
+            out.push_str(&format!("{date})\n"));
+        }
         out.push_str(&format!("File: {}\n", key.1));
         for item in items {
             // A gutter of real line numbers lets the agent cite an exact

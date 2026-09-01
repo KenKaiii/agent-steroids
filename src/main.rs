@@ -452,8 +452,15 @@ fn main() -> Result<()> {
         } => {
             let escaped = regex::escape(&symbol);
             // Definition syntax across the indexed languages, widest first.
+            // A definition is the keyword, then the name as a whole word. The
+            // leading \b matters: without it `define ToolCallResult` also
+            // matches `parseToolCallResult`, which is a use, not a definition.
+            //
+            // The second branch covers languages that assign instead of
+            // declaring, like `const Foo = (` or `Bar := func(`. Both branches
+            // anchor the name on the left as well as the right.
             let pattern = format!(
-                r"(def|class|func|fn|type|struct|interface|impl|const|var|let)\s+{escaped}\b|{escaped}\s*(=|:=)\s*(function|async|\()"
+                r"\b(def|class|func|fn|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}\b|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
             );
             let query = Query {
                 tag: tag.as_deref(),

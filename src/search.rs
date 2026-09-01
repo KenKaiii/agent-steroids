@@ -41,6 +41,10 @@ pub struct Match {
     /// only an archive checksum was available, in which case no permalink is
     /// offered rather than a broken one.
     pub commit_sha: String,
+    /// Date of the repository's last upstream commit, empty when unknown.
+    /// Lets a reader weigh a snippet from a project that stopped moving years
+    /// ago differently from one changed this week.
+    pub pushed_at: String,
 }
 
 impl Match {
@@ -608,7 +612,8 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     };
 
     let mut sql = String::from(
-        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, ''), d.language \
+        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, ''), d.language, \
+         COALESCE(r.pushed_at, '') \
          FROM documents d JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
     );
     let mut binds: Vec<String> = Vec::new();
@@ -631,7 +636,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     }
 
     let mut statement = store.db.prepare(&sql)?;
-    let rows: Vec<(i64, String, String, String, String)> = statement
+    let rows: Vec<(i64, String, String, String, String, String)> = statement
         .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
             Ok((
                 row.get(0)?,
@@ -639,6 +644,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         })?
         .collect::<Result<_, _>>()?;
@@ -646,7 +652,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _, path, _, _)| {
+        .filter(|(id, _, path, _, _, _)| {
             narrowed.as_ref().is_none_or(|set| set.contains(id))
                 && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
         })
@@ -667,7 +673,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let mut collected = 0usize;
     let mut truncated = false;
 
-    for (doc_id, repo, path, commit_sha, language) in rows {
+    for (doc_id, repo, path, commit_sha, language, pushed_at) in rows {
         if by_repo.get(&repo).is_some_and(|v| v.len() >= per_repo_cap) {
             continue;
         }
@@ -711,6 +717,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 context: lines[low..high].iter().map(|s| s.to_string()).collect(),
                 scope: enclosing_scope(&lines, number),
                 commit_sha: commit_sha.clone(),
+                pushed_at: pushed_at.clone(),
             });
             collected += 1;
             if bucket.len() >= per_repo_cap {
@@ -752,6 +759,25 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
 #[cfg(test)]
 mod tests {
+    /// `define Foo` must not match `parseFoo`: a use is not a definition, and
+    /// returning one sends the reader to the wrong file.
+    #[test]
+    fn definition_pattern_requires_whole_word() {
+        let escaped = regex::escape("ToolCallResult");
+        let pattern = format!(
+            r"\b(def|class|func|fn|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}\b|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
+        );
+        let re = regex::Regex::new(&pattern).expect("valid");
+        assert!(re.is_match("interface ToolCallResult {"));
+        assert!(re.is_match("type ToolCallResult struct {"));
+        assert!(re.is_match("const ToolCallResult = ("));
+        assert!(
+            !re.is_match("export const parseToolCallResult = ("),
+            "matched a use as a definition"
+        );
+        assert!(!re.is_match("return handleToolCallResult(x)"));
+    }
+
     /// A delimiter inside a string literal must not convince the scanner that
     /// a comment never closed. Real case: a Python file matching on "/*" left
     /// 2,940 lines of code invisible to search.
@@ -825,6 +851,7 @@ mod tests {
             context: vec![],
             scope: String::new(),
             commit_sha: "5460f467b02e49471c0fd6cfc9ca0adab6351f98".into(),
+            pushed_at: String::new(),
         };
         assert_eq!(
             base.permalink().unwrap(),
