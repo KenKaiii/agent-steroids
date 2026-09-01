@@ -4,3 +4,7 @@ corpus-data/
 
 # Local agent scratch: screenshots and pasted files from chat sessions
 .gg/uploads/
+
+# Local agent config
+CLAUDE.md
+.gg/
