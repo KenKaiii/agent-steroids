@@ -201,7 +201,14 @@ impl Store {
             pending_bytes: 0,
             stop_trigrams: None,
         };
-        store.recover_compaction()?;
+        // Only a writer may repair the corpus. A reader that did so could
+        // delete the temporary file of a compaction running in another
+        // process, stranding its committed offsets against the old blob file
+        // and destroying every document.
+        if store.lock.is_some() {
+            store.recover_compaction()?;
+        }
+        store.check_blob_integrity()?;
         store.discard_unflushed()?;
         Ok(store)
     }
@@ -529,6 +536,39 @@ impl Store {
         Ok(())
     }
 
+    /// Refuse to open a corpus whose offsets do not describe its blob file.
+    ///
+    /// Checked by decoding one document rather than comparing sizes, because a
+    /// blob file is legitimately longer than the bytes in use: an update
+    /// orphans the old copy until the next compaction. Only an actual read
+    /// distinguishes "has slack" from "describes a different file".
+    ///
+    /// Without this the mismatch surfaces one document at a time as an opaque
+    /// decompression error, which reads like corrupt data rather than the
+    /// recoverable bookkeeping failure it is.
+    fn check_blob_integrity(&mut self) -> Result<()> {
+        let probe: Option<i64> = self
+            .db
+            .query_row(
+                "SELECT id FROM documents WHERE offset >= 0 ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(doc_id) = probe else {
+            return Ok(());
+        };
+        if self.read_document(doc_id).is_ok() {
+            return Ok(());
+        }
+        bail!(
+            "corpus is inconsistent: its stored offsets do not match blobs.bin, so \
+             no document can be read. This happens when a compaction commits \
+             without replacing the file. Recover with `steroids update` then \
+             `steroids index`, or delete the corpus directory and re-add."
+        );
+    }
+
     /// Finish or discard a compaction that was interrupted before its rename.
     ///
     /// The committed generation decides: if it matches a leftover file, the
@@ -553,12 +593,19 @@ impl Store {
                 continue;
             };
             match suffix.parse::<u64>() {
+                // The committed generation names the file the database now
+                // describes, so finishing the rename is the repair.
                 Ok(generation) if generation == expected && expected > 0 => {
                     std::fs::rename(entry.path(), &self.blob_path)?;
                 }
-                _ => {
+                // Anything older is a rolled-back attempt and is safe to drop.
+                // A newer number belongs to a compaction that has not committed
+                // yet, which may still be running: leaving it costs disk, while
+                // deleting it would destroy that run.
+                Ok(generation) if generation < expected => {
                     let _ = std::fs::remove_file(entry.path());
                 }
+                _ => {}
             }
         }
         Ok(())
@@ -879,6 +926,45 @@ mod tests {
         assert!(
             store.list_repos()?.is_empty(),
             "a repository with no content was still listed"
+        );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A reader must never repair the corpus. Recovery deletes stale
+    /// compaction files, and a reader doing that can delete the temporary file
+    /// of a compaction running in another process, stranding its committed
+    /// offsets against the old blob file and destroying every document.
+    #[test]
+    fn a_reader_never_deletes_a_pending_compaction() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let mut store = Store::open_for_write(&dir)?;
+            let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+            store.add_document(repo, "a.rs", "rust", b"fn main() {}".repeat(20))?;
+            store.flush_pending()?;
+        }
+
+        // A compaction in flight: its file exists, its generation is not
+        // committed yet.
+        let pending = dir.join("blobs.compacting.9");
+        std::fs::write(&pending, b"in progress")?;
+
+        // Opening to read must leave it alone.
+        let _reader = Store::open(&dir)?;
+        assert!(
+            pending.exists(),
+            "a read-only open deleted a pending compaction"
+        );
+
+        // A writer must leave a newer generation alone too, since it may
+        // belong to a run that has not committed.
+        let _writer = Store::open_for_write(&dir)?;
+        assert!(
+            pending.exists(),
+            "a writer deleted a compaction newer than the committed generation"
         );
 
         std::fs::remove_dir_all(&dir)?;

@@ -891,7 +891,10 @@ mod tests {
             wide.matches.len(),
             "per_repo=1 returned a repository more than once"
         );
-        assert!(repos.len() >= 5, "only {} repositories found", repos.len());
+        // How many repositories contain the term depends on the corpus, so the
+        // property worth asserting is the one the cap guarantees: every result
+        // comes from a different project.
+        assert!(!wide.matches.is_empty(), "no matches to check");
         Ok(())
     }
 
