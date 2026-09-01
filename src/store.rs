@@ -964,10 +964,17 @@ pub fn scratch_dir(label: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("steroids-{label}-{}-{unique}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    // Nanoseconds as well as a counter, and no attempt to clear the path:
+    // Windows cannot delete a directory whose lock file a previous run still
+    // holds open, so never reuse a name rather than trying to empty one.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "steroids-{label}-{}-{unique}-{stamp}",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]
