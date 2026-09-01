@@ -270,6 +270,7 @@ impl App {
         match search::search(&mut self.store, &pattern, &query) {
             Ok(matches) => {
                 self.hits = matches
+                    .matches
                     .into_iter()
                     .map(|item| SearchHit {
                         // Context starts `context_lines` above the hit, except

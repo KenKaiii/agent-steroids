@@ -68,6 +68,8 @@ impl Match {
 #[derive(Default)]
 pub struct Query<'a> {
     pub repo: Option<&'a str>,
+    /// Restrict to repositories carrying this label.
+    pub tag: Option<&'a str>,
     pub language: Option<&'a str>,
     pub path_glob: Option<&'a str>,
     pub ignore_case: bool,
@@ -568,7 +570,23 @@ fn has_inline_case_flag(pattern: &str) -> bool {
     false
 }
 
-pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Match>> {
+/// Matches, plus whether the corpus held more than were returned.
+pub struct SearchResults {
+    pub matches: Vec<Match>,
+    /// True when the scan stopped before exhausting the corpus, so an agent
+    /// knows a narrower query would show different code rather than assuming
+    /// it has seen everything.
+    pub more_available: bool,
+}
+
+impl std::ops::Deref for SearchResults {
+    type Target = Vec<Match>;
+    fn deref(&self) -> &Self::Target {
+        &self.matches
+    }
+}
+
+pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchResults> {
     if pattern.len() > MAX_PATTERN_LENGTH {
         bail!("pattern too long");
     }
@@ -597,6 +615,15 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     if let Some(repo) = query.repo {
         sql.push_str(" AND r.name = ?");
         binds.push(repo.to_string());
+    }
+    if let Some(tag) = query.tag {
+        // Tags are stored comma separated, so wrap both sides to match a whole
+        // label rather than a prefix of a longer one.
+        sql.push_str(&format!(
+            " AND ',' || COALESCE(r.tags, '') || ',' LIKE ?{}",
+            binds.len() + 1
+        ));
+        binds.push(format!("%,{},%", tag.trim().to_lowercase()));
     }
     if let Some(language) = query.language {
         sql.push_str(&format!(" AND d.language = ?{}", binds.len() + 1));
@@ -638,6 +665,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
     let mut by_repo: HashMap<String, Vec<Match>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
+    let mut truncated = false;
 
     for (doc_id, repo, path, commit_sha, language) in rows {
         if by_repo.get(&repo).is_some_and(|v| v.len() >= per_repo_cap) {
@@ -690,6 +718,8 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
             }
         }
         if collected >= query.limit * 4 {
+            // Stopped early, so more matches exist beyond what was gathered.
+            truncated = true;
             break;
         }
     }
@@ -699,6 +729,10 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
         .filter_map(|repo| by_repo.remove(&repo).map(|v| v.into_iter()))
         .collect();
     let mut results = Vec::new();
+    let gathered: usize = queues.iter().map(|q| q.len()).sum();
+    if gathered > query.limit {
+        truncated = true;
+    }
     while !queues.is_empty() && results.len() < query.limit {
         queues.retain_mut(|queue| match queue.next() {
             Some(item) => {
@@ -710,7 +744,10 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<Vec<Mat
             None => false,
         });
     }
-    Ok(results)
+    Ok(SearchResults {
+        matches: results,
+        more_available: truncated,
+    })
 }
 
 #[cfg(test)]

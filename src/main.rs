@@ -68,6 +68,9 @@ enum Command {
         pattern: String,
         #[arg(long)]
         repo: Option<String>,
+        /// Only repositories carrying this label
+        #[arg(long)]
+        tag: Option<String>,
         #[arg(long)]
         language: Option<String>,
         /// Path glob, e.g. 'src/**/*.py'
@@ -87,6 +90,9 @@ enum Command {
     /// Find where a function, class or constant is defined
     Define {
         symbol: String,
+        /// Only repositories carrying this label
+        #[arg(long)]
+        tag: Option<String>,
         #[arg(long)]
         language: Option<String>,
         #[arg(long, default_value_t = 20)]
@@ -364,6 +370,7 @@ fn main() -> Result<()> {
         Command::Search {
             pattern,
             repo,
+            tag,
             language,
             path,
             ignore_case,
@@ -373,12 +380,36 @@ fn main() -> Result<()> {
         } => {
             let query = Query {
                 repo: repo.as_deref(),
+                tag: tag.as_deref(),
                 language: language.as_deref(),
                 path_glob: path.as_deref(),
                 ignore_case,
                 skip_comments: !include_comments,
                 ..Query::new(limit)
             };
+            // An unknown tag matches nothing, and blaming the pattern for that
+            // sends the agent rewriting a query that was never the problem.
+            if let Some(tag) = &tag
+                && store.repos_tagged(Some(tag))?.is_empty()
+            {
+                let known = store.tag_counts()?;
+                println!(
+                    "No repositories are tagged '{tag}'. {}",
+                    if known.is_empty() {
+                        "No tags exist yet: steroids tag --add <label> <repo>".to_string()
+                    } else {
+                        format!(
+                            "Known tags: {}",
+                            known
+                                .iter()
+                                .map(|(t, n)| format!("{t} ({n})"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                );
+                return Ok(());
+            }
             let matches = search::search(&mut store, &pattern, &query)?;
             if json {
                 let facts;
@@ -398,7 +429,15 @@ fn main() -> Result<()> {
                     "{}",
                     render_matches(
                         &matches,
-                        &format!("{} match(es) for /{pattern}/", matches.len())
+                        &format!(
+                            "{} match(es) for /{pattern}/{}",
+                            matches.len(),
+                            if matches.more_available {
+                                ", more available (raise --limit or narrow the search)"
+                            } else {
+                                ""
+                            }
+                        )
                     )
                 );
             }
@@ -406,6 +445,7 @@ fn main() -> Result<()> {
 
         Command::Define {
             symbol,
+            tag,
             language,
             limit,
             json,
@@ -416,6 +456,7 @@ fn main() -> Result<()> {
                 r"(def|class|func|fn|type|struct|interface|impl|const|var|let)\s+{escaped}\b|{escaped}\s*(=|:=)\s*(function|async|\()"
             );
             let query = Query {
+                tag: tag.as_deref(),
                 language: language.as_deref(),
                 ..Query::new(limit)
             };

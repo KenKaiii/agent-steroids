@@ -58,35 +58,43 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
     let mut out = String::from(header);
     out.push('\n');
 
-    let mut last_file = String::new();
+    // Results are interleaved across repositories for fairness, so hits in one
+    // file arrive scattered. Group them first, or the same file header is
+    // printed several times and burns the reader's attention for nothing.
+    let mut order: Vec<(&str, &str)> = Vec::new();
+    let mut grouped: std::collections::HashMap<(&str, &str), Vec<&Match>> = Default::default();
     for item in matches {
-        let file = format!("{}/{}", item.repo, item.path);
-        // Consecutive hits in one file share a header rather than repeating
-        // the repository, path and link for each.
-        if file != last_file {
-            out.push_str(&format!("\nRepo: {}\n", item.repo));
-            out.push_str(&format!("File: {}\n", item.path));
-            last_file = file;
+        let key = (item.repo.as_str(), item.path.as_str());
+        grouped.entry(key).or_default().push(item);
+        if !order.contains(&key) {
+            order.push(key);
         }
+    }
 
-        // A gutter of real line numbers lets the agent cite an exact location
-        // and lets a person scroll straight to it.
-        out.push('\n');
-        // Skip the scope line when the match is the definition itself, or when
-        // the definition is already visible in the context below it.
-        let start = item.context_start();
-        let scope_shown = item
-            .context
-            .iter()
-            .any(|line| line.trim() == item.scope.trim());
-        if !item.scope.is_empty() && !scope_shown {
-            out.push_str(&format!("  in {}\n", item.scope));
-        }
-        let width = (start + item.context.len()).to_string().len();
-        for (offset, line) in item.context.iter().enumerate() {
-            let number = start + offset;
-            let marker = if number == item.line_number { ">" } else { " " };
-            out.push_str(&format!("{marker} {number:>width$} \u{2502} {line}\n"));
+    for key in order {
+        let items = &grouped[&key];
+        out.push_str(&format!("\nRepo: {}\n", key.0));
+        out.push_str(&format!("File: {}\n", key.1));
+        for item in items {
+            // A gutter of real line numbers lets the agent cite an exact
+            // location and lets a person scroll straight to it.
+            out.push('\n');
+            // Skip the scope line when the match is the definition itself, or
+            // when the definition is already visible in the context below it.
+            let start = item.context_start();
+            let scope_shown = item
+                .context
+                .iter()
+                .any(|line| line.trim() == item.scope.trim());
+            if !item.scope.is_empty() && !scope_shown {
+                out.push_str(&format!("  in {}\n", item.scope));
+            }
+            let width = (start + item.context.len()).to_string().len();
+            for (offset, line) in item.context.iter().enumerate() {
+                let number = start + offset;
+                let marker = if number == item.line_number { ">" } else { " " };
+                out.push_str(&format!("{marker} {number:>width$} \u{2502} {line}\n"));
+            }
         }
     }
     out
