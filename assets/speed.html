@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+Source for assets/speed.png. After editing, regenerate with:
+
+  npx playwright screenshot --viewport-size=1280,470 \
+    assets/speed.html assets/speed.png
+
+Figures must match the benchmark table in README.md.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 470px;
+    background: #0b0d12;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .glow {
+    position: absolute;
+    width: 560px; height: 560px;
+    left: -170px; bottom: -240px;
+    border-radius: 50%;
+    filter: blur(100px);
+    background: rgba(34,211,238,.15);
+  }
+
+  .stage { position: relative; z-index: 2; width: 1120px; }
+
+  .title {
+    font-size: 30px;
+    font-weight: 800;
+    color: #f1f5f9;
+    letter-spacing: -.02em;
+  }
+  .sub {
+    margin-top: 8px;
+    font-size: 17px;
+    color: #7c8798;
+    margin-bottom: 40px;
+  }
+
+  .row { display: flex; align-items: center; margin-bottom: 26px; }
+  .name {
+    width: 245px;
+    font-size: 19px;
+    font-weight: 700;
+    color: #8b96a7;
+    padding-right: 20px;
+  }
+  .name.us { color: #22d3ee; }
+
+  .track { flex: 1; display: flex; align-items: center; gap: 16px; }
+
+  .bar {
+    height: 40px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.09);
+  }
+  .bar.us {
+    background: linear-gradient(100deg, #22d3ee, #a855f7);
+    border: none;
+    box-shadow: 0 0 34px rgba(34,211,238,.45);
+  }
+
+  .val {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 19px;
+    font-weight: 700;
+    color: #8b96a7;
+    white-space: nowrap;
+  }
+  .val.us { color: #22d3ee; }
+  .val small { display: block; font-family: inherit; font-size: 13px; font-weight: 400; color: #5f6b7d; margin-top: 3px; }
+
+  .foot {
+    margin-top: 42px;
+    display: flex;
+    gap: 12px;
+  }
+  .chip {
+    font-size: 16px;
+    color: #cbd5e1;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 999px;
+    padding: 11px 22px;
+  }
+  .chip b { color: #22d3ee; font-weight: 700; }
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+  <div class="glow"></div>
+
+  <div class="stage">
+    <div class="title">Your agent wants 30 code samples before it writes a function</div>
+    <div class="sub">Same searches, same queries, measured the same way.</div>
+
+    <div class="row">
+      <div class="name us">Agent Steroids</div>
+      <div class="track">
+        <div class="bar us" style="width: 26px"></div>
+        <div class="val us">0.3 seconds<small>on your own disk</small></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="name">Hosted code search</div>
+      <div class="track">
+        <div class="bar" style="width: 590px"></div>
+        <div class="val">1 to 20 minutes<small>if you dodge the rate limit</small></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="chip"><b>No</b> rate limits</span>
+      <span class="chip"><b>No</b> API keys</span>
+      <span class="chip"><b>Works</b> offline</span>
+    </div>
+  </div>
+</body>
+</html>

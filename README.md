@@ -44,6 +44,10 @@ That is fine for looking something up once. It falls apart when your agent wants
 
 ## ✅ What this does instead
 
+<p align="center">
+  <img src="assets/before-after.png" alt="Without Agent Steroids your agent writes from year-old training data. With it, your agent reads four real implementations from repos on your own disk first.">
+</p>
+
 You build your own library of code. Locally.
 
 Pick the repos you care about. Building an AI framework? Grab fifty AI framework repos. Writing a payments integration? Grab the ones that already did it well. Then your agent searches all of it instantly, as many times as it likes, forever.
@@ -69,6 +73,10 @@ Those 40 repos were 382 MB of source. The code stores as 94 MB, and the rest is 
 Searches come back in **under 10 milliseconds** using about **8 MB of memory**. You could keep the whole thing on a USB stick and carry it between machines.
 
 ## ⚡ Against the hosted alternatives
+
+<p align="center">
+  <img src="assets/speed.png" alt="Thirty searches take 0.3 seconds locally, versus one to twenty minutes through a hosted code search API, if you dodge the rate limit.">
+</p>
 
 Same searches, run against tools that query public code over an API:
 
