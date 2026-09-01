@@ -149,6 +149,31 @@ When nothing matches, it says why. Sometimes that answer is "none of your repos 
 
 `search`, `define` and `repos` all take `--json` if you want machine-readable output.
 
+## 📦 The starter pack
+
+Do not want to pick repos yourself? This repo ships a curated list of around
+500 widely used, actively maintained projects:
+
+```bash
+curl -O https://raw.githubusercontent.com/KenKaiii/agent-steroids/main/starter-repos.txt
+steroids add --from-file starter-repos.txt
+steroids index
+```
+
+Thirty categories: TypeScript, Python, Rust, Go, React, Next.js, Vue, Svelte,
+Tailwind, AI agents, LLM tooling, RAG, MCP, databases, DevOps, testing,
+security, mobile, game dev, and more. Every entry was checked against GitHub
+when the list was built: not archived, not a fork, committed to within the last
+year, and well starred. No awesome-lists, no tutorials, no books, just code.
+
+Measured on the full list: **480 repos, 800,000 files, 1.8 GB**, about 25
+minutes to fetch and 2 minutes to index. Searches stay around a quarter of a
+second.
+
+That is a lot for a first run. The file is grouped by category with comments,
+so open it and delete the sections you do not care about. One section is closer
+to 100 MB and a couple of minutes.
+
 ## 📚 Filling it yourself
 
 If you would rather drive it manually:

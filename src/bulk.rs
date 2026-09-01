@@ -132,6 +132,9 @@ pub fn ingest_all(
                     report(&name, Err("unchanged"), done, total);
                 }
                 Ok(Ok(repo)) => {
+                    // Report the canonical owner/name rather than the raw
+                    // input, so a pasted URL does not appear as one.
+                    let name = repo.repo.clone();
                     // Writing is serialised here: rusqlite connections are not
                     // Sync, and it is the cheap half of the work anyway.
                     match fetch::commit(&repo, store) {
