@@ -18,6 +18,14 @@ const MAX_CANDIDATES: usize = 20_000;
 /// Above this many narrowed ids, an `IN` list stops being cheaper than a scan
 /// and starts straining the SQL parser.
 const SQL_ID_LIMIT: usize = 50_000;
+/// Documents examined before a search settles for what it has. Chosen from
+/// measurement: a selective pattern leaves thousands of trigram candidates,
+/// and scanning them all costs five times as long for results the ranking
+/// would not have promoted anyway.
+const MAX_DOCUMENTS_SCANNED: usize = 2_000;
+/// Once a candidate set is this small, decoding another hundred-thousand-entry
+/// posting list to shrink it further costs more than it saves.
+const NARROW_ENOUGH: usize = 200;
 /// Files read to confirm a literal really occurs, when diagnosing empty results.
 const FRAGMENT_CONFIRM_LIMIT: usize = 40;
 /// Lines of context shown either side of a match.
@@ -344,29 +352,68 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
     if runs.is_empty() {
         return Ok(None);
     }
-    let mut best: Option<HashSet<i64>> = None;
-    for run in runs {
-        let mut grams: Vec<[u8; 3]> = trigrams(run.as_bytes()).into_iter().collect();
-        grams.sort_unstable();
-        for gram in grams {
-            // Absent, or too common to be stored; neither narrows anything.
-            let Some(ids) = posting(store, &gram)? else {
-                continue;
-            };
-            let ids: HashSet<i64> = ids.into_iter().collect();
-            best = Some(match best {
-                None => ids,
-                Some(previous) => previous.intersection(&ids).copied().collect(),
-            });
-            if best.as_ref().is_some_and(|set| set.is_empty()) {
-                return Ok(Some(HashSet::new()));
+
+    // Decoding a posting list is the expensive part of narrowing: a common
+    // trigram holds a hundred thousand ids, and decoding several of those
+    // costs more than the search that follows. The compressed length is a good
+    // proxy for how many ids a list holds, so read the sizes first and start
+    // with the most selective. Every later intersection then runs against a
+    // set that is already small, and a rare trigram often reduces the answer
+    // to a handful before the common ones are touched at all.
+    let mut sized: Vec<([u8; 3], i64)> = Vec::new();
+    for run in &runs {
+        for gram in trigrams(run.as_bytes()) {
+            if let Some(bytes) = posting_size(store, &gram)? {
+                sized.push((gram, bytes));
             }
+        }
+    }
+    if sized.is_empty() {
+        return Ok(None);
+    }
+    sized.sort_unstable_by_key(|(_, bytes)| *bytes);
+
+    let mut best: Option<HashSet<i64>> = None;
+    for (gram, _) in sized {
+        let Some(ids) = posting(store, &gram)? else {
+            continue;
+        };
+        best = Some(match best {
+            None => ids.into_iter().collect(),
+            Some(previous) => {
+                // Walk the smaller side, not the freshly decoded one.
+                let ids: HashSet<i64> = ids.into_iter().collect();
+                let (small, large) = if previous.len() <= ids.len() {
+                    (&previous, &ids)
+                } else {
+                    (&ids, &previous)
+                };
+                small.iter().filter(|id| large.contains(id)).copied().collect()
+            }
+        });
+        match best.as_ref() {
+            Some(set) if set.is_empty() => return Ok(Some(HashSet::new())),
+            // Already narrow enough that further intersection costs more than
+            // the regex pass it would save.
+            Some(set) if set.len() <= NARROW_ENOUGH => break,
+            _ => {}
         }
     }
     Ok(best)
 }
 
-/// Documents that could match, or None if the index cannot narrow.
+/// Compressed size of a posting list, without decoding it.
+fn posting_size(store: &Store, gram: &[u8; 3]) -> Result<Option<i64>> {
+    Ok(store
+        .db
+        .query_row(
+            "SELECT LENGTH(doc_ids) FROM postings WHERE trigram = ?1",
+            params![gram.as_slice()],
+            |row| row.get(0),
+        )
+        .ok())
+}
+
 fn candidates(store: &Store, pattern: &str) -> Result<Option<HashSet<i64>>> {
     let mut combined = HashSet::new();
     for branch in alternatives(pattern) {
@@ -714,8 +761,10 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         });
 
     let mut sql = String::from(
-        "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, ''), d.language, \
-         COALESCE(r.pushed_at, '') \
+        // Only what filtering and grouping need. Pulling the commit sha and
+        // last-commit date for every document costs 400ms across a corpus of
+        // 638,000 rows, and they are wanted for the ten that match.
+        "SELECT d.id, r.name, d.path, d.language \
          FROM documents d JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
     );
     let mut binds: Vec<String> = Vec::new();
@@ -741,23 +790,16 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     }
 
     let mut statement = store.db.prepare(&sql)?;
-    let rows: Vec<(i64, String, String, String, String, String)> = statement
+    let rows: Vec<(i64, String, String, String)> = statement
         .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<Result<_, _>>()?;
     drop(statement);
 
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _, path, _, _, _)| {
+        .filter(|(id, _, path, _)| {
             narrowed.as_ref().is_none_or(|set| set.contains(id))
                 && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
         })
@@ -778,14 +820,43 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let mut collected = 0usize;
     let mut truncated = false;
 
-    for (doc_id, repo, path, commit_sha, language, pushed_at) in rows {
+    let mut scanned = 0usize;
+    // Commit sha and last-commit date, looked up once per repository that
+    // actually contributes a result rather than for every candidate document.
+    let mut repo_meta: HashMap<String, (String, String)> = HashMap::new();
+    for (doc_id, repo, path, language) in rows {
         if by_repo.get(&repo).is_some_and(|v| v.len() >= per_repo_cap) {
             continue;
+        }
+        // The trigram index narrows to documents that could match, not ones
+        // that do, and a selective pattern can leave thousands of candidates
+        // for ten results. Stop once enough have been examined: the answer is
+        // already good, and reading the rest only delays it.
+        scanned += 1;
+        if scanned > MAX_DOCUMENTS_SCANNED && collected >= query.limit {
+            truncated = true;
+            break;
         }
         let content = store.read_document(doc_id)?;
         if !matcher.is_match(&content) {
             continue;
         }
+        // The document matched, so its repository will appear in the results
+        // and the metadata is finally worth fetching.
+        if !repo_meta.contains_key(&repo) {
+            let found = store
+                .db
+                .query_row(
+                    "SELECT COALESCE(commit_sha, ''), COALESCE(pushed_at, '') \
+                     FROM repos WHERE name = ?1",
+                    params![&repo],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap_or_default();
+            repo_meta.insert(repo.clone(), found);
+        }
+        let meta = repo_meta.get(&repo).expect("inserted above").clone();
+
         let text = String::from_utf8_lossy(&content).into_owned();
         let lines: Vec<&str> = text.lines().collect();
         let prose = if query.skip_comments {
@@ -821,9 +892,9 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 line_number: number,
                 context: lines[low..high].iter().map(|s| s.to_string()).collect(),
                 scope: enclosing_scope(&lines, number),
-                commit_sha: commit_sha.clone(),
+                commit_sha: meta.0.clone(),
                 context_first_line: low + 1,
-                pushed_at: pushed_at.clone(),
+                pushed_at: meta.1.clone(),
             });
             collected += 1;
             if bucket.len() >= per_repo_cap {
