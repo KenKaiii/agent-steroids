@@ -136,8 +136,10 @@ same problem.
 
 Add --json to search, define or repos for structured output.
 
-If a search says the topic is not covered, tell me which repos to add
-instead of guessing. Add them with: steroids add owner/name && steroids index
+If a search says the topic is not covered, that is a gap in my corpus, not a
+bad query. Do not retry variations. Instead: run `steroids discover` to find
+well starred, actively maintained repos that solve the problem, tell me what
+you found and why it fits, and add them once I agree.
 ```
 
 Now when you ask for a rate limiter, it goes and reads four real implementations first instead of recalling one from training.
@@ -146,7 +148,22 @@ There is no plugin and no server to run. Your agent just calls the command, same
 
 Results are spread across different repos on purpose, so the agent sees four projects' takes side by side instead of four files from one project. Every snippet is labelled with the function it came from, so it can skip the irrelevant ones without opening anything.
 
-When nothing matches, it says why. Sometimes that answer is "none of your repos cover this, go add some" instead of letting the agent spin.
+When nothing matches, it says why, and hands over the commands to fix it:
+
+```
+No code for 'swift_actor_isolation' in this corpus. Corpus holds 592 repositories.
+
+This is a gap in what is indexed, not a bad search, so do not retry variations.
+Fill the gap instead:
+  1. Find candidates:  steroids discover '<topic or language>' --limit 20
+  2. Tell the user what you found and why it fits their project
+  3. With their go-ahead: steroids add <repos> --tag <label> && steroids index
+  4. Re-run this search
+```
+
+So instead of your agent shrugging, it comes back with "I have nothing on this,
+but I found five well maintained projects that do, shall I index them?" The
+corpus grows into whatever you are actually building.
 
 `search`, `define` and `repos` all take `--json` if you want machine-readable output.
 

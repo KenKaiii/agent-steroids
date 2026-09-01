@@ -167,18 +167,30 @@ pub fn render_empty(facts: &Facts) -> String {
         facts.languages.join(", ")
     );
     match &facts.diagnosis {
-        Diagnosis::EmptyCorpus => "No matches: the corpus is empty. Ask the user to index \
-             repositories first, e.g. `steroids add owner/name`."
+        Diagnosis::EmptyCorpus => "No matches: the corpus is empty, so there is \
+             nothing to search yet.\n\n\
+             Offer to fill it: look at what the user is building, run \
+             `steroids discover '<topic>' --limit 20` to find well starred, actively \
+             maintained projects that solve similar problems, then \
+             `steroids add <repos> && steroids index` once they agree."
             .to_string(),
         Diagnosis::NearMiss { missing, nearest } => format!(
             "No matches for '{missing}', but the corpus does contain '{nearest}'. {scope} \
              Likely a spelling or naming difference: retry searching for '{nearest}'."
         ),
+        // The corpus genuinely does not cover this, so rephrasing will not
+        // help. Hand over the commands that fix it instead, and tell the
+        // caller to check with the user before spending their disk.
         Diagnosis::TopicAbsent { missing } => format!(
-            "No matches, and '{missing}' does not appear anywhere in the corpus. {scope} \
-             The indexed projects likely do not cover this topic. Tell the user which \
-             repositories would need indexing (`steroids add owner/name`) rather than \
-             retrying variations of this search."
+            "No code for '{missing}' in this corpus. {scope}\n\n\
+             This is a gap in what is indexed, not a bad search, so do not retry \
+             variations. Fill the gap instead:\n\
+             \x20 1. Find candidates:  steroids discover '<topic or language>' --limit 20\n\
+             \x20 2. Tell the user what you found and why it fits their project\n\
+             \x20 3. With their go-ahead: steroids add <repos> --tag <label> && steroids index\n\
+             \x20 4. Re-run this search\n\n\
+             If you cannot reach GitHub, ask the user for repository names that solve \
+             this problem and add those."
         ),
         Diagnosis::SpellingMismatch { known } => format!(
             "No matches for this exact pattern, but '{known}' does appear in the corpus. \
