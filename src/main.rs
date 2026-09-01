@@ -60,7 +60,12 @@ enum Command {
         tag: Vec<String>,
     },
     /// Build the trigram index. Run after any add.
-    Index,
+    Index {
+        /// Discard the existing index and rebuild from scratch. Only needed if
+        /// the index is suspect; ordinary runs extend it in place.
+        #[arg(long)]
+        rebuild: bool,
+    },
     /// Re-fetch every indexed repository at its latest commit
     Update,
     /// Regex search across every indexed repository
@@ -274,7 +279,7 @@ fn main() -> Result<()> {
         command,
         Command::Add { .. }
             | Command::Update
-            | Command::Index
+            | Command::Index { .. }
             | Command::Decay { .. }
             | Command::Remove { .. }
             | Command::Compact
@@ -385,8 +390,13 @@ fn main() -> Result<()> {
             eprintln!("  next: steroids index");
         }
 
-        Command::Index => {
-            let stats = index::build(&mut store, &mut |done, total| {
+        Command::Index { rebuild } => {
+            let builder = if rebuild {
+                index::rebuild
+            } else {
+                index::build
+            };
+            let stats = builder(&mut store, &mut |done, total| {
                 eprint!("\r  indexing {done}/{total}");
                 let _ = std::io::stderr().flush();
             })?;

@@ -279,6 +279,11 @@ steroids repos       # see what you have
 steroids stats       # see what it costs you
 ```
 
+`index` extends the existing index rather than rebuilding it, so adding a
+repository to a corpus of 600,000 documents takes seconds rather than minutes.
+It rebuilds by itself once enough of the index refers to replaced documents,
+and `steroids index --rebuild` forces one.
+
 `update` checks each repo's latest commit first and only downloads the ones
 that actually moved, so running it daily on a big corpus costs almost nothing.
 Measured on 98 repositories with nothing changed upstream: **5.5 seconds**.
