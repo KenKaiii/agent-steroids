@@ -9,6 +9,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Linux, macOS and Windows all differ in ways this tool cares about: file
+  # locking, home directory, and path handling. Building on one and hoping is
+  # how a platform quietly breaks.
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Tests
+        run: cargo test --release
+      - name: First run works
+        shell: bash
+        run: |
+          ./target/release/steroids${{ runner.os == 'Windows' && '.exe' || '' }} --root ci-corpus add antirez/smallchat
+          ./target/release/steroids${{ runner.os == 'Windows' && '.exe' || '' }} --root ci-corpus index
+          ./target/release/steroids${{ runner.os == 'Windows' && '.exe' || '' }} --root ci-corpus search 'int main' --limit 1
+          ./target/release/steroids${{ runner.os == 'Windows' && '.exe' || '' }} --root ci-corpus repos
+
   check:
     runs-on: ubuntu-latest
     steps:

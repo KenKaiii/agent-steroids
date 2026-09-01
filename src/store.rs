@@ -879,11 +879,70 @@ fn lock_exclusive(file: &File) -> Result<()> {
     Ok(())
 }
 
-/// Windows has no flock; concurrent writers are rare enough there that the
-/// SQLite busy timeout alone is accepted rather than adding a dependency.
-#[cfg(not(unix))]
-fn lock_exclusive(_file: &File) -> Result<()> {
+/// Windows equivalent, via `LockFileEx`.
+///
+/// Not a no-op: two writers that each train a zstd dictionary leave the
+/// other's documents undecodable, and that has already destroyed a corpus
+/// once. A platform without the lock is a platform where that happens
+/// silently, so this blocks the same way `flock` does.
+#[cfg(windows)]
+fn lock_exclusive(file: &File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct Overlapped {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        event: *mut core::ffi::c_void,
+    }
+
+    unsafe extern "system" {
+        fn LockFileEx(
+            handle: *mut core::ffi::c_void,
+            flags: u32,
+            reserved: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+            overlapped: *mut Overlapped,
+        ) -> i32;
+    }
+    const EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+
+    let mut overlapped = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        event: std::ptr::null_mut(),
+    };
+    // SAFETY: the handle is owned by `file` and valid for this call, and the
+    // overlapped structure lives until the call returns.
+    let locked = unsafe {
+        LockFileEx(
+            file.as_raw_handle(),
+            EXCLUSIVE_LOCK,
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut overlapped,
+        )
+    };
+    if locked == 0 {
+        bail!(
+            "could not lock the corpus for writing: {}",
+            std::io::Error::last_os_error()
+        );
+    }
     Ok(())
+}
+
+/// Anything that is neither Unix nor Windows. Refuses rather than pretending,
+/// because a silent no-op here is corruption waiting to happen.
+#[cfg(not(any(unix, windows)))]
+fn lock_exclusive(_file: &File) -> Result<()> {
+    bail!("this platform has no file locking, so writing a corpus is unsafe")
 }
 
 #[cfg(test)]
