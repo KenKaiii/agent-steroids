@@ -24,6 +24,9 @@ pub struct Config {
     pub discover_limit: usize,
     /// Skip repositories below this star count.
     pub min_stars: u32,
+    /// Skip repositories with no upstream commit in this many months. Zero
+    /// accepts any age.
+    pub max_age_months: u32,
 }
 
 impl Default for Config {
@@ -37,6 +40,9 @@ impl Default for Config {
             discover_query: "topic:ai-agents".into(),
             discover_limit: 25,
             min_stars: 100,
+            // Two years. Old enough to keep stable, finished libraries;
+            // recent enough to exclude code that predates current practice.
+            max_age_months: 24,
         }
     }
 }
@@ -58,6 +64,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     ("discover_limit", "how many repos a discovery run may add"),
     ("min_stars", "ignore repos with fewer stars than this"),
+    (
+        "max_age_months",
+        "ignore repos with no commit in N months (0 = any age)",
+    ),
 ];
 
 impl Config {
@@ -101,6 +111,7 @@ impl Config {
             "discover_query" => self.discover_query.clone(),
             "discover_limit" => self.discover_limit.to_string(),
             "min_stars" => self.min_stars.to_string(),
+            "max_age_months" => self.max_age_months.to_string(),
             _ => String::new(),
         }
     }
@@ -127,6 +138,7 @@ impl Config {
                 self.discover_limit = limit as usize;
             }
             "min_stars" => self.min_stars = parse_number(value, "min_stars")? as u32,
+            "max_age_months" => self.max_age_months = parse_number(value, "max_age_months")? as u32,
             other => bail!(
                 "unknown setting {other:?}. Known: {}",
                 KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")

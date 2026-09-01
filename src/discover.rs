@@ -22,7 +22,12 @@ pub struct Candidate {
 ///
 /// `query` is raw search qualifiers, e.g. `topic:ai-agents language:python`.
 /// Star and archive filters are appended so every caller gets them.
-pub fn search(query: &str, min_stars: u32, limit: usize) -> Result<Vec<Candidate>> {
+pub fn search(
+    query: &str,
+    min_stars: u32,
+    max_age_months: u32,
+    limit: usize,
+) -> Result<Vec<Candidate>> {
     if query.trim().is_empty() {
         bail!("empty discovery query");
     }
@@ -37,6 +42,12 @@ pub fn search(query: &str, min_stars: u32, limit: usize) -> Result<Vec<Candidate
     // Archived repositories are frozen by definition, so never suggest them.
     if !full.contains("archived:") {
         full.push_str(" archived:false");
+    }
+    // Filter age at the source rather than after fetching. A corpus of
+    // abandoned projects teaches an agent last decade's practice, which is the
+    // problem this tool exists to solve.
+    if max_age_months > 0 && !full.contains("pushed:") {
+        full.push_str(&format!(" pushed:>{}", days_ago(max_age_months * 30)));
     }
     let url = format!(
         "https://api.github.com/search/repositories?q={}&sort=stars&order=desc&per_page={limit}",
@@ -90,7 +101,8 @@ pub fn trending(
     if let Some(language) = language {
         query.push_str(&format!(" language:{language}"));
     }
-    search(&query, min_stars, limit)
+    // Already constrained to recent activity, so no separate age filter.
+    search(&query, min_stars, 0, limit)
 }
 
 /// An ISO date `days` before today, computed from the Unix epoch so no date
@@ -164,7 +176,7 @@ mod tests {
 
     #[test]
     fn rejects_an_empty_query() {
-        assert!(search("   ", 0, 10).is_err());
+        assert!(search("   ", 0, 0, 10).is_err());
     }
 
     #[test]

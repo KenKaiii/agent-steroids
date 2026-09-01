@@ -214,25 +214,37 @@ fn main() -> Result<()> {
                 eprintln!("No repositories given. Pass names or --from-file.");
                 std::process::exit(2);
             }
-            if ingest_all(&mut store, &names, include_tests, metadata, parallel)? > 0 {
+            if ingest_all(
+                &mut store,
+                &names,
+                include_tests,
+                metadata,
+                parallel,
+                &Default::default(),
+            )? > 0
+            {
                 std::process::exit(1);
             }
             eprintln!("  next: steroids index");
         }
 
         Command::Update => {
-            let names: Vec<String> = store
-                .list_repos()?
-                .into_iter()
-                .map(|summary| summary.name)
-                .collect();
-            if names.is_empty() {
+            let summaries = store.list_repos()?;
+            if summaries.is_empty() {
                 println!("  nothing to update: steroids add owner/name");
                 return Ok(());
             }
+            // Pass the commit we already hold so anything upstream has not
+            // moved is skipped instead of re-downloaded.
+            let known: std::collections::HashMap<String, String> = summaries
+                .iter()
+                .map(|s| (s.name.clone(), s.commit_sha.clone()))
+                .collect();
+            let names: Vec<String> = summaries.into_iter().map(|s| s.name).collect();
+
             // Re-adding replaces the previous copy, so this is just an ingest
             // of everything already tracked.
-            if ingest_all(&mut store, &names, false, true, parallel)? > 0 {
+            if ingest_all(&mut store, &names, false, true, parallel, &known)? > 0 {
                 std::process::exit(1);
             }
 
@@ -242,6 +254,7 @@ fn main() -> Result<()> {
                 match discover::search(
                     &settings.discover_query,
                     settings.min_stars,
+                    settings.max_age_months,
                     settings.discover_limit,
                 ) {
                     Ok(found) => {
@@ -252,7 +265,14 @@ fn main() -> Result<()> {
                             .collect();
                         if !fresh.is_empty() {
                             eprintln!("  discovering {} new repositories…", fresh.len());
-                            ingest_all(&mut store, &fresh, false, false, parallel)?;
+                            ingest_all(
+                                &mut store,
+                                &fresh,
+                                false,
+                                false,
+                                parallel,
+                                &Default::default(),
+                            )?;
                         }
                     }
                     // Discovery is a bonus; a search failure must not fail the
@@ -457,7 +477,7 @@ fn main() -> Result<()> {
                 if let Some(language) = &language {
                     text.push_str(&format!(" language:{language}"));
                 }
-                discover::search(&text, min_stars, limit)?
+                discover::search(&text, min_stars, settings.max_age_months, limit)?
             };
 
             // Never re-fetch what is already indexed.
@@ -505,7 +525,14 @@ fn main() -> Result<()> {
                 eprintln!();
                 // A repository that fails to fetch must not discard the ones
                 // that succeeded: they are on disk and need indexing.
-                let failures = ingest_all(&mut store, &names, false, false, parallel)?;
+                let failures = ingest_all(
+                    &mut store,
+                    &names,
+                    false,
+                    false,
+                    parallel,
+                    &Default::default(),
+                )?;
                 eprintln!("  next: steroids index");
                 if failures == names.len() {
                     std::process::exit(1);
@@ -622,6 +649,7 @@ fn ingest_all(
     include_tests: bool,
     with_metadata: bool,
     parallel: usize,
+    known: &std::collections::HashMap<String, String>,
 ) -> Result<usize> {
     // Per-repository lines are useful for a handful and noise for hundreds.
     let terse = names.len() > 8;
@@ -631,6 +659,7 @@ fn ingest_all(
         include_tests,
         with_metadata,
         parallel,
+        known,
         &mut |name, result, done, total| match result {
             Ok(prepared) => {
                 if terse {
@@ -647,6 +676,8 @@ fn ingest_all(
                     );
                 }
             }
+            // "unchanged" is a skip, not a failure.
+            Err("unchanged") => {}
             Err(error) => eprintln!("\r  {name}: FAILED ({error})              "),
         },
     )?;
@@ -674,6 +705,9 @@ fn ingest_all(
             outcome.files,
             human(outcome.bytes as f64)
         );
+        if outcome.unchanged > 0 {
+            println!("  {} already up to date", outcome.unchanged);
+        }
         // In terse mode the per-repository failures scrolled past, so summarise
         // them rather than leaving a bare "0 repositories" unexplained.
         if !outcome.failed.is_empty() {
@@ -685,6 +719,9 @@ fn ingest_all(
                 eprintln!("    …and {} more", outcome.failed.len() - 5);
             }
         }
+    }
+    if !terse && outcome.unchanged > 0 {
+        println!("  {} already up to date", outcome.unchanged);
     }
     Ok(outcome.failed.len())
 }

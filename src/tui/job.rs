@@ -41,12 +41,13 @@ pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
             false,
             true,
             bulk::DEFAULT_PARALLEL,
+            &Default::default(),
             &mut |name, result, done, total| {
                 let _ = progress.send(Msg::Progress(match result {
                     Ok(prepared) => {
                         format!("{done}/{total}  {name}: {} files", prepared.files.len())
                     }
-                    Err(error) => format!("{done}/{total}  {name} failed: {error}"),
+                    Err(note) => format!("{done}/{total}  {name}: {note}"),
                 }));
             },
         );
@@ -91,7 +92,19 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
                 return;
             }
         };
-        let names: Vec<String> = match store.list_repos() {
+        let summaries = match store.list_repos() {
+            Ok(rows) => rows,
+            Err(error) => {
+                let _ = tx.send(Msg::Failed(error.to_string()));
+                return;
+            }
+        };
+        // Skip anything upstream has not moved, rather than re-downloading it.
+        let known: std::collections::HashMap<String, String> = summaries
+            .iter()
+            .map(|s| (s.name.clone(), s.commit_sha.clone()))
+            .collect();
+        let names: Vec<String> = match Ok::<_, anyhow::Error>(summaries) {
             Ok(rows) => rows.into_iter().map(|summary| summary.name).collect(),
             Err(error) => {
                 let _ = tx.send(Msg::Failed(error.to_string()));
@@ -112,6 +125,7 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
             false,
             true,
             bulk::DEFAULT_PARALLEL,
+            &known,
             &mut |name, _, done, total| {
                 let _ = progress.send(Msg::Progress(format!("updating {done}/{total}  {name}")));
             },

@@ -34,18 +34,24 @@ pub struct BulkOutcome {
     /// Files refused across the whole batch for carrying hidden characters,
     /// prefixed with their repository.
     pub rejected: Vec<String>,
+    /// Repositories already at the upstream commit, so not re-downloaded.
+    pub unchanged: usize,
 }
 
 /// Fetch every repository, writing each as it arrives.
 ///
 /// `report` is called on the calling thread as each repository lands, so the
 /// caller decides how to display progress.
+///
+/// `known` maps repository to the commit already held, letting an update skip
+/// anything upstream has not moved. Empty for a fresh add.
 pub fn ingest_all(
     store: &mut Store,
     names: &[String],
     include_tests: bool,
     with_metadata: bool,
     parallel: usize,
+    known: &std::collections::HashMap<String, String>,
     report: Progress<'_>,
 ) -> Result<BulkOutcome> {
     let total = names.len();
@@ -56,14 +62,21 @@ pub fn ingest_all(
             files: 0,
             bytes: 0,
             rejected: Vec::new(),
+            unchanged: 0,
         });
     }
 
-    // A repeated name would download and write the same repository twice.
+    // A repeated repository would be downloaded and written twice. Compare
+    // canonical owner/name, so a pasted URL and a bare name are recognised as
+    // the same thing. An unparseable name is kept so it can fail with a proper
+    // message rather than vanishing here.
     let mut seen = std::collections::HashSet::new();
     let names: Vec<String> = names
         .iter()
-        .filter(|name| seen.insert(name.as_str()))
+        .filter(|name| {
+            let key = fetch::normalize_repo(name).unwrap_or_else(|_| (*name).clone());
+            seen.insert(key)
+        })
         .cloned()
         .collect();
     let total = names.len();
@@ -73,7 +86,8 @@ pub fn ingest_all(
     let cursor = AtomicUsize::new(0);
     // Bounded: without a cap, fast downloads would queue every repository's
     // decoded source in memory while the writer works through them.
-    let (tx, rx) = sync_channel::<(String, Result<PreparedRepo, String>)>(QUEUE_DEPTH);
+    type Prepared = Result<Result<PreparedRepo, fetch::Skipped>, String>;
+    let (tx, rx) = sync_channel::<(String, Prepared)>(QUEUE_DEPTH);
 
     let outcome = thread::scope(|scope| -> Result<BulkOutcome> {
         for _ in 0..parallel {
@@ -85,8 +99,10 @@ pub fn ingest_all(
                     let Some(name) = names.get(index) else {
                         return;
                     };
-                    let prepared = fetch::prepare(name, include_tests, with_metadata)
-                        .map_err(|error| error.to_string());
+                    let known_sha = known.get(name).map(String::as_str).unwrap_or("");
+                    let prepared =
+                        fetch::prepare_if_changed(name, include_tests, with_metadata, known_sha)
+                            .map_err(|error| error.to_string());
                     // A closed receiver means the writer is gone; stop early.
                     if tx.send((name.clone(), prepared)).is_err() {
                         return;
@@ -104,12 +120,18 @@ pub fn ingest_all(
             files: 0,
             bytes: 0,
             rejected: Vec::new(),
+            unchanged: 0,
         };
         let mut done = 0usize;
         for (name, prepared) in rx {
             done += 1;
             match prepared {
-                Ok(repo) => {
+                // Already at the upstream commit; nothing was downloaded.
+                Ok(Err(fetch::Skipped::Unchanged)) => {
+                    outcome.unchanged += 1;
+                    report(&name, Err("unchanged"), done, total);
+                }
+                Ok(Ok(repo)) => {
                     // Writing is serialised here: rusqlite connections are not
                     // Sync, and it is the cheap half of the work anyway.
                     match fetch::commit(&repo, store) {

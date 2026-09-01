@@ -109,9 +109,14 @@ Honestly, the easiest way to use this is to not use it yourself. Paste this to [
 ```
 Install Agent Steroids for me: https://github.com/KenKaiii/agent-steroids
 
-Then look at what I am building, pick around 20 open source repos that solve
-similar problems well, and index them. Once that is done, tell me what you
-added and how much space it used.
+Then look at what I am building and curate a corpus for it:
+  - Use `steroids discover` to find well starred, actively maintained repos
+    that solve similar problems
+  - Index around 20 of them, then run `steroids index`
+  - Show me what you added and how much space it used
+
+From then on keep it fresh: run `steroids update` when I ask, and suggest new
+repos whenever you hit a problem the current corpus does not cover.
 ```
 
 That is it. It reads the README, installs it, works out what is relevant to your project, and fills your library.
@@ -184,6 +189,11 @@ steroids repos       # see what you have
 steroids stats       # see what it costs you
 ```
 
+`update` checks each repo's latest commit first and only downloads the ones
+that actually moved, so running it daily on a big corpus costs almost nothing.
+Adding a repo you already have is skipped too, whether you paste the name or
+the full URL.
+
 Repos go quiet. You can have those cleaned out automatically:
 
 ```bash
@@ -209,6 +219,7 @@ steroids config min_stars 500    # change one
 | `discover_query` | `topic:ai-agents` | What to look for when discovering |
 | `discover_limit` | `25` | Cap on how many one discovery run adds |
 | `min_stars` | `100` | Skip anything below this |
+| `max_age_months` | `24` | Skip repos with no commits in N months. 0 accepts any age |
 
 Settings live inside the library itself, so they travel with it.
 
@@ -247,6 +258,13 @@ STEROIDS_TEST_ROOT=~/.steroids cargo test --release
 ```
 
 **How it works.** Repos come down as tarballs straight from codeload, which has no rate limit, so a 500 repo ingest is capped by your bandwidth and nothing else. Files are filtered while the download is still streaming, so the full repo never lands on disk. What survives gets compressed against a shared zstd dictionary trained on your own corpus. Search narrows candidates with a non-positional trigram index, then confirms each hit with a real regex, which is why the index costs a fraction of what a normal one would.
+
+**Gitee.** References can be prefixed `gitee:owner/name`, and the plumbing
+works: Gitee uses the same archive layout and the same git protocol. In
+practice ingest usually fails from outside China, because Gitee answers archive
+requests with a captcha page unless it recognises the client. Getting past that
+would mean impersonating another tool to evade their bot check, so the request
+is made honestly and the failure reported.
 
 The GitHub API is only used for discovery and for the optional star and commit-date metadata that `decay` needs. Plain `add` never touches it.
 

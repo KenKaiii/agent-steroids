@@ -19,7 +19,67 @@ const MAX_TARBALL_BYTES: u64 = 512 * 1024 * 1024;
 ///
 /// A URL copied from the browser address bar is the common case, so strip the
 /// scheme, host, and any trailing path (`/tree/main`, `.git`, `#readme`).
+/// Where a repository is hosted.
+///
+/// Recorded as a prefix on the stored name (`gitee:owner/name`) so one corpus
+/// can hold both, and so a search result says which forge it came from.
+///
+/// Gitee note: the git protocol works, but Gitee serves a captcha page instead
+/// of the archive to user agents it does not recognise, so ingest usually fails
+/// from outside China. Impersonating another client to get past that would be
+/// evading their access control, so the request is made honestly and the
+/// failure is reported.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Host {
+    GitHub,
+    Gitee,
+}
+
+impl Host {
+    /// The forge a reference points at, and the reference with any host prefix
+    /// removed.
+    pub fn detect(input: &str) -> (Host, &str) {
+        if let Some(rest) = input.strip_prefix("gitee:") {
+            return (Host::Gitee, rest);
+        }
+        if input.contains("gitee.com") {
+            return (Host::Gitee, input);
+        }
+        (Host::GitHub, input)
+    }
+
+    /// Prefix stored with the repository name, empty for the default forge.
+    fn prefix(self) -> &'static str {
+        match self {
+            Host::GitHub => "",
+            Host::Gitee => "gitee:",
+        }
+    }
+
+    /// Source archive for a ref. Both forges serve a `<name>-<ref>/` tarball.
+    fn tarball_url(self, repo: &str, reference: &str) -> String {
+        match self {
+            Host::GitHub => format!("https://codeload.github.com/{repo}/tar.gz/{reference}"),
+            Host::Gitee => {
+                format!("https://gitee.com/{repo}/repository/archive/{reference}.tar.gz")
+            }
+        }
+    }
+
+    /// Git smart-HTTP endpoint, used to read the head commit without an API
+    /// call. Both forges speak the same pkt-line protocol.
+    fn refs_url(self, repo: &str) -> String {
+        match self {
+            Host::GitHub => {
+                format!("https://github.com/{repo}/info/refs?service=git-upload-pack")
+            }
+            Host::Gitee => format!("https://gitee.com/{repo}/info/refs?service=git-upload-pack"),
+        }
+    }
+}
+
 pub fn normalize_repo(input: &str) -> Result<String> {
+    let (host, input) = Host::detect(input);
     let mut text = input.trim();
     // Scheme, then host: `ssh://git@github.com/a/b` needs both stripped, in
     // that order.
@@ -27,8 +87,14 @@ pub fn normalize_repo(input: &str) -> Result<String> {
         text = text.strip_prefix(prefix).unwrap_or(text);
     }
     text = text.strip_prefix("git@").unwrap_or(text);
-    for host in ["www.github.com/", "github.com/", "github.com:"] {
-        text = text.strip_prefix(host).unwrap_or(text);
+    for prefix in [
+        "www.github.com/",
+        "github.com/",
+        "github.com:",
+        "gitee.com/",
+        "gitee.com:",
+    ] {
+        text = text.strip_prefix(prefix).unwrap_or(text);
     }
     text = text.split(['#', '?']).next().unwrap_or(text);
 
@@ -42,7 +108,12 @@ pub fn normalize_repo(input: &str) -> Result<String> {
     let name = name.strip_suffix(".git").unwrap_or(name);
     let repo = format!("{owner}/{name}");
     validate_repo(&repo)?;
-    Ok(repo)
+    Ok(format!("{}{repo}", host.prefix()))
+}
+
+/// Split a stored name into its forge and bare owner/name.
+pub fn split_host(stored: &str) -> (Host, &str) {
+    Host::detect(stored)
 }
 
 /// GitHub's rules for owner and repository names.
@@ -150,8 +221,9 @@ pub fn get_json(url: &str) -> Result<String> {
 /// commit hash and therefore a permalink that will still resolve years from
 /// now. Asking the REST API for the same thing would cap a bulk ingest at 60
 /// repositories an hour.
-fn resolve_ref(repo: &str) -> Option<(String, String)> {
-    let url = format!("https://github.com/{repo}/info/refs?service=git-upload-pack");
+fn resolve_ref(stored: &str) -> Option<(String, String)> {
+    let (host, repo) = split_host(stored);
+    let url = host.refs_url(repo);
     let mut response = get(&url, "application/x-git-upload-pack-advertisement").ok()?;
     // HEAD is advertised first, so a small prefix is enough. Read rather than
     // limit: a repository with thousands of refs sends megabytes here, and a
@@ -203,7 +275,12 @@ fn resolve_ref(repo: &str) -> Option<(String, String)> {
 /// requests/hour unauthenticated, which would cap a bulk add at 60 repositories
 /// no matter how many threads are running. Downloading the code itself goes
 /// through codeload, which has no such limit.
-pub fn fetch_metadata(repo: &str) -> Result<Upstream> {
+pub fn fetch_metadata(stored: &str) -> Result<Upstream> {
+    let (host, repo) = split_host(stored);
+    if host != Host::GitHub {
+        // Only GitHub metadata is wired up; the code itself still ingests.
+        bail!("metadata is only available for GitHub repositories");
+    }
     validate_repo(repo)?;
     let body = get(
         &format!("https://api.github.com/repos/{repo}"),
@@ -248,6 +325,34 @@ pub struct PreparedRepo {
 /// `with_metadata` adds one REST call per repository to record stars and the
 /// last-commit date that decay needs. Off by default: those calls are the
 /// binding constraint on a large bulk add, and the code arrives without them.
+/// Why a repository was not re-fetched.
+pub enum Skipped {
+    /// Upstream is still on the commit we already hold.
+    Unchanged,
+}
+
+/// Download a repository only if its upstream commit differs from `known`.
+///
+/// Resolving the ref costs one small, unrate-limited request; downloading the
+/// archive costs megabytes. Across a corpus where most repositories have not
+/// moved since yesterday, checking first is the difference between an update
+/// that takes minutes and one that takes hours.
+pub fn prepare_if_changed(
+    name: &str,
+    include_tests: bool,
+    with_metadata: bool,
+    known: &str,
+) -> Result<Result<PreparedRepo, Skipped>> {
+    let repo = normalize_repo(name)?;
+    if !known.is_empty()
+        && let Some((sha, _)) = resolve_ref(&repo)
+        && sha == known
+    {
+        return Ok(Err(Skipped::Unchanged));
+    }
+    prepare(name, include_tests, with_metadata).map(Ok)
+}
+
 pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<PreparedRepo> {
     let repo = normalize_repo(name)?;
     // codeload resolves HEAD without knowing the branch name, which is what
@@ -271,11 +376,9 @@ pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<P
         upstream.branch = branch;
     }
 
+    let (host, bare) = split_host(&repo);
     let mut response = get(
-        &format!(
-            "https://codeload.github.com/{repo}/tar.gz/{}",
-            upstream.branch
-        ),
+        &host.tarball_url(bare, &upstream.branch),
         "application/octet-stream",
     )?;
     if upstream.commit_sha.is_empty() {
@@ -386,6 +489,28 @@ mod tests {
         ] {
             assert!(validate_repo(bad).is_err(), "accepted {bad:?}");
         }
+    }
+
+    #[test]
+    fn recognises_gitee_references() -> Result<()> {
+        for input in [
+            "gitee:mirrors/nginx",
+            "https://gitee.com/mirrors/nginx",
+            "https://gitee.com/mirrors/nginx.git",
+        ] {
+            assert_eq!(
+                normalize_repo(input)?,
+                "gitee:mirrors/nginx",
+                "on {input:?}"
+            );
+        }
+        // A GitHub reference keeps no prefix, so existing corpora are unchanged.
+        assert_eq!(normalize_repo("psf/requests")?, "psf/requests");
+
+        let (host, bare) = split_host("gitee:mirrors/nginx");
+        assert!(host == Host::Gitee);
+        assert_eq!(bare, "mirrors/nginx");
+        Ok(())
     }
 
     #[test]
