@@ -176,8 +176,8 @@ fn draw_repos(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // Reserve the fixed columns first so the date is never the thing that
     // falls off the right edge; the name absorbs whatever is left.
-    // 12 = language, 14 = files, 10 = size, 9 = stars, 20 = sha + gap + date.
-    const TRAILING: usize = 12 + 14 + 10 + 9 + 20;
+    // 12 = language, 14 = files, 10 = size, 20 = sha + gap + date.
+    const TRAILING: usize = 12 + 14 + 10 + 20;
     // 4 = two borders plus one column of padding each side.
     let width = (area.width as usize).saturating_sub(TRAILING + 4).max(12);
     let items: Vec<ListItem> = app
@@ -198,20 +198,6 @@ fn draw_repos(frame: &mut Frame, area: Rect, app: &mut App) {
                 Span::styled(
                     format!("{:>8}  ", human(summary.disk_bytes as f64)),
                     Style::default().fg(ACCENT),
-                ),
-                Span::styled(
-                    // Blank rather than a misleading zero when never fetched.
-                    format!(
-                        "{:>7}  ",
-                        if summary.stars >= 1000 {
-                            format!("{}k\u{2605}", summary.stars / 1000)
-                        } else if summary.stars > 0 {
-                            format!("{}\u{2605}", summary.stars)
-                        } else {
-                            String::new()
-                        }
-                    ),
-                    Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(
                     format!(

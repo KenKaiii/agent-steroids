@@ -49,7 +49,6 @@ pub fn ingest_all(
     store: &mut Store,
     names: &[String],
     include_tests: bool,
-    with_metadata: bool,
     parallel: usize,
     known: &std::collections::HashMap<String, String>,
     report: Progress<'_>,
@@ -100,9 +99,8 @@ pub fn ingest_all(
                         return;
                     };
                     let known_sha = known.get(name).map(String::as_str).unwrap_or("");
-                    let prepared =
-                        fetch::prepare_if_changed(name, include_tests, with_metadata, known_sha)
-                            .map_err(|error| error.to_string());
+                    let prepared = fetch::prepare_if_changed(name, include_tests, known_sha)
+                        .map_err(|error| error.to_string());
                     // A closed receiver means the writer is gone; stop early.
                     if tx.send((name.clone(), prepared)).is_err() {
                         return;

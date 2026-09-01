@@ -54,11 +54,6 @@ enum Command {
         /// Keep test files, which are excluded by default
         #[arg(long)]
         include_tests: bool,
-        /// Skip the star count and last-commit date. Those cost one
-        /// rate-limited API call each, so a batch of hundreds is faster
-        /// without them, at the cost of `decay` having nothing to judge.
-        #[arg(long)]
-        no_metadata: bool,
     },
     /// Build the trigram index. Run after any add.
     Index,
@@ -195,15 +190,6 @@ fn link(repo: &str, width: usize) -> String {
     format!("\u{1b}]8;;https://gitee.com/{bare}\u{7}{padded}\u{1b}]8;;\u{7}")
 }
 
-/// Star count, blank when unknown rather than a misleading zero.
-fn stars(count: i64) -> String {
-    match count {
-        0 => String::new(),
-        n if n >= 1000 => format!("{}k*", n / 1000),
-        n => format!("{n}*"),
-    }
-}
-
 fn human(bytes: f64) -> String {
     for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("KB", 1e3)] {
         if bytes >= scale {
@@ -228,7 +214,6 @@ fn main() -> Result<()> {
             repos,
             from_file,
             include_tests,
-            no_metadata,
         } => {
             let mut names = repos;
             if let Some(path) = from_file {
@@ -247,7 +232,6 @@ fn main() -> Result<()> {
                 &mut store,
                 &names,
                 include_tests,
-                !no_metadata,
                 parallel,
                 &Default::default(),
             )? > 0
@@ -273,7 +257,7 @@ fn main() -> Result<()> {
 
             // Re-adding replaces the previous copy, so this is just an ingest
             // of everything already tracked.
-            if ingest_all(&mut store, &names, false, true, parallel, &known)? > 0 {
+            if ingest_all(&mut store, &names, false, parallel, &known)? > 0 {
                 std::process::exit(1);
             }
 
@@ -294,14 +278,7 @@ fn main() -> Result<()> {
                             .collect();
                         if !fresh.is_empty() {
                             eprintln!("  discovering {} new repositories…", fresh.len());
-                            ingest_all(
-                                &mut store,
-                                &fresh,
-                                false,
-                                false,
-                                parallel,
-                                &Default::default(),
-                            )?;
+                            ingest_all(&mut store, &fresh, false, parallel, &Default::default())?;
                         }
                     }
                     // Discovery is a bonus; a search failure must not fail the
@@ -453,9 +430,6 @@ fn main() -> Result<()> {
                             "disk_bytes": summary.disk_bytes,
                             "source_bytes": summary.source_bytes,
                             "last_commit": summary.pushed_at,
-                            "stars": summary.stars,
-                            "license": summary.license,
-                            "description": summary.description,
                             "url": format!("https://github.com/{}", summary.name),
                         })
                     })
@@ -466,12 +440,11 @@ fn main() -> Result<()> {
             } else {
                 for summary in &rows {
                     println!(
-                        "  {:<40} {:<12} {:>5} files  {:>8}  {:>7}  {}  {}",
+                        "  {:<40} {:<12} {:>5} files  {:>8}  {}  {}",
                         link(&summary.name, 40),
                         summary.language,
                         summary.files,
                         human(summary.disk_bytes as f64),
-                        stars(summary.stars),
                         &summary.commit_sha[..8.min(summary.commit_sha.len())],
                         summary.indexed_at
                     );
@@ -559,14 +532,8 @@ fn main() -> Result<()> {
                 eprintln!();
                 // A repository that fails to fetch must not discard the ones
                 // that succeeded: they are on disk and need indexing.
-                let failures = ingest_all(
-                    &mut store,
-                    &names,
-                    false,
-                    false,
-                    parallel,
-                    &Default::default(),
-                )?;
+                let failures =
+                    ingest_all(&mut store, &names, false, parallel, &Default::default())?;
                 eprintln!("  next: steroids index");
                 if failures == names.len() {
                     std::process::exit(1);
@@ -697,7 +664,6 @@ fn ingest_all(
     store: &mut Store,
     names: &[String],
     include_tests: bool,
-    with_metadata: bool,
     parallel: usize,
     known: &std::collections::HashMap<String, String>,
 ) -> Result<usize> {
@@ -707,7 +673,6 @@ fn ingest_all(
         store,
         names,
         include_tests,
-        with_metadata,
         parallel,
         known,
         &mut |name, result, done, total| match result {

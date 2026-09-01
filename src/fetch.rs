@@ -5,7 +5,7 @@
 
 use std::io::Read;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use flate2::read::GzDecoder;
 
 use crate::filters::{has_hidden_characters, language_of, looks_binary, should_index};
@@ -203,11 +203,7 @@ pub struct Upstream {
     pub commit_sha: String,
     /// Date of the most recent commit. This is what "abandoned" means.
     pub pushed_at: String,
-    pub stars: i64,
     pub archived: bool,
-    /// SPDX identifier, e.g. `MIT`. Empty when the repo declares none.
-    pub license: String,
-    pub description: String,
 }
 
 /// Fetch a JSON endpoint as text, with the shared auth and user-agent headers.
@@ -272,49 +268,9 @@ fn resolve_ref(stored: &str) -> Option<(String, String)> {
     None
 }
 
-/// Freshness facts, from the REST API.
-///
-/// Only decay needs these, so ingest does not call this: the API allows 60
-/// requests/hour unauthenticated, which would cap a bulk add at 60 repositories
-/// no matter how many threads are running. Downloading the code itself goes
-/// through codeload, which has no such limit.
-pub fn fetch_metadata(stored: &str) -> Result<Upstream> {
-    let (host, repo) = split_host(stored);
-    if host != Host::GitHub {
-        // Only GitHub metadata is wired up; the code itself still ingests.
-        bail!("metadata is only available for GitHub repositories");
-    }
-    validate_repo(repo)?;
-    let body = get(
-        &format!("https://api.github.com/repos/{repo}"),
-        "application/vnd.github+json",
-    )?
-    .body_mut()
-    .read_to_string()
-    .context("reading repository metadata")?;
-    let meta: serde_json::Value = serde_json::from_str(&body)?;
-
-    Ok(Upstream {
-        branch: meta["default_branch"]
-            .as_str()
-            .unwrap_or("HEAD")
-            .to_string(),
-        commit_sha: String::new(),
-        pushed_at: meta["pushed_at"].as_str().unwrap_or_default().to_string(),
-        stars: meta["stargazers_count"].as_i64().unwrap_or(0),
-        archived: meta["archived"].as_bool().unwrap_or(false),
-        license: meta["license"]["spdx_id"]
-            .as_str()
-            .filter(|id| *id != "NOASSERTION")
-            .unwrap_or_default()
-            .to_string(),
-        description: meta["description"]
-            .as_str()
-            .unwrap_or_default()
-            .chars()
-            .take(120)
-            .collect(),
-    })
+/// A Unix timestamp as `YYYY-MM-DD`.
+fn iso_date(seconds: u64) -> String {
+    crate::discover::iso_date(seconds)
 }
 
 /// A repository downloaded and filtered, ready to be written.
@@ -354,7 +310,6 @@ pub enum Skipped {
 pub fn prepare_if_changed(
     name: &str,
     include_tests: bool,
-    with_metadata: bool,
     known: &str,
 ) -> Result<Result<PreparedRepo, Skipped>> {
     let repo = normalize_repo(name)?;
@@ -364,10 +319,10 @@ pub fn prepare_if_changed(
     {
         return Ok(Err(Skipped::Unchanged));
     }
-    prepare(name, include_tests, with_metadata).map(Ok)
+    prepare(name, include_tests).map(Ok)
 }
 
-pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<PreparedRepo> {
+pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
     let repo = normalize_repo(name)?;
     // codeload resolves HEAD without knowing the branch name, which is what
     // lets ingest skip the API entirely.
@@ -375,13 +330,7 @@ pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<P
         branch: "HEAD".into(),
         ..Default::default()
     };
-    let mut upstream = if with_metadata {
-        // Best-effort: a rate-limited metadata call must not stop the code
-        // itself being fetched, or one exhausted quota would refresh nothing.
-        fetch_metadata(&repo).unwrap_or_else(|_| fallback())
-    } else {
-        fallback()
-    };
+    let mut upstream = fallback();
 
     // Resolve the real commit so results can carry permalinks. Not fatal if it
     // fails: codeload still serves HEAD, and links fall back to the branch.
@@ -418,6 +367,16 @@ pub fn prepare(name: &str, include_tests: bool, with_metadata: bool) -> Result<P
     let mut archive = tar::Archive::new(GzDecoder::new(reader));
     for entry in archive.entries()? {
         let mut entry = entry?;
+        // Every entry in a GitHub source archive carries the archived commit's
+        // date, so the last-commit date that decay needs comes free with the
+        // download. Asking the REST API for it would cost one rate-limited
+        // request per repository and cap a bulk update at 60 an hour.
+        if upstream.pushed_at.is_empty()
+            && let Ok(mtime) = entry.header().mtime()
+            && mtime > 0
+        {
+            upstream.pushed_at = iso_date(mtime);
+        }
         if !entry.header().entry_type().is_file() {
             continue;
         }

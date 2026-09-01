@@ -78,12 +78,6 @@ pub struct RepoSummary {
     /// several times larger and would not reconcile with the total.
     pub disk_bytes: i64,
     pub pushed_at: String,
-    /// Star count, zero when never fetched.
-    pub stars: i64,
-    /// SPDX identifier, e.g. `MIT`. Empty when unknown.
-    pub license: String,
-    /// One-line summary from the repository's own metadata.
-    pub description: String,
     /// Language holding the most indexed bytes. Derived from what was actually
     /// kept, not GitHub's label, so it reflects the code in the corpus after
     /// filtering.
@@ -172,25 +166,18 @@ impl Store {
             params![name],
         )?;
         self.db.execute(
-            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, stars, archived, \
-             license, description) \
-             VALUES (?1, ?2, datetime('now'), ?3, ?4, ?5, ?6, ?7) \
+            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived) \
+             VALUES (?1, ?2, datetime('now'), ?3, ?4) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
              indexed_at = excluded.indexed_at, \
              pushed_at = COALESCE(NULLIF(excluded.pushed_at, ''), pushed_at), \
-             stars = CASE WHEN excluded.stars > 0 THEN excluded.stars ELSE stars END, \
              archived = CASE WHEN excluded.pushed_at <> '' \
-                             THEN excluded.archived ELSE archived END, \
-             license = COALESCE(NULLIF(excluded.license, ''), license), \
-             description = COALESCE(NULLIF(excluded.description, ''), description)",
+                             THEN excluded.archived ELSE archived END",
             params![
                 name,
                 upstream.commit_sha,
                 upstream.pushed_at,
-                upstream.stars,
-                upstream.archived as i64,
-                upstream.license,
-                upstream.description
+                upstream.archived as i64
             ],
         )?;
         Ok(self.db.query_row(
@@ -501,8 +488,7 @@ impl Store {
         let mut statement = self.db.prepare(
             "SELECT r.name, COALESCE(r.commit_sha, ''), COALESCE(r.indexed_at, ''), \
              COUNT(d.id), COALESCE(SUM(d.raw_size), 0), COALESCE(SUM(d.length), 0), \
-             COALESCE(r.pushed_at, ''), COALESCE(r.stars, 0), \
-             COALESCE(r.license, ''), COALESCE(r.description, ''), \
+             COALESCE(r.pushed_at, ''), \
              COALESCE(( \
                  SELECT language FROM documents \
                  WHERE repo_id = r.id AND offset >= 0 \
@@ -521,10 +507,7 @@ impl Store {
                     source_bytes: row.get(4)?,
                     disk_bytes: row.get(5)?,
                     pushed_at: row.get(6)?,
-                    stars: row.get(7)?,
-                    license: row.get(8)?,
-                    description: row.get(9)?,
-                    language: row.get(10)?,
+                    language: row.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -777,7 +760,6 @@ mod tests {
             &crate::fetch::Upstream {
                 commit_sha: "sha1".into(),
                 pushed_at: "2020-01-01T00:00:00Z".into(),
-                stars: 7500,
                 archived: true,
                 ..Default::default()
             },
@@ -792,13 +774,12 @@ mod tests {
             },
         )?;
 
-        let (pushed, stars, archived): (String, i64, i64) = store.db.query_row(
-            "SELECT pushed_at, stars, archived FROM repos WHERE name = 'a/b'",
+        let (pushed, archived): (String, i64) = store.db.query_row(
+            "SELECT pushed_at, archived FROM repos WHERE name = 'a/b'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         assert_eq!(pushed, "2020-01-01T00:00:00Z", "last-commit date erased");
-        assert_eq!(stars, 7500, "stars erased");
         assert_eq!(archived, 1, "archived flag erased");
 
         std::fs::remove_dir_all(&directory)?;

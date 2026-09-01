@@ -39,7 +39,6 @@ pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
             &mut store,
             &names,
             false,
-            true,
             bulk::DEFAULT_PARALLEL,
             &Default::default(),
             &mut |name, result, done, total| {
@@ -123,7 +122,6 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
             &mut store,
             &names,
             false,
-            true,
             bulk::DEFAULT_PARALLEL,
             &known,
             &mut |name, _, done, total| {

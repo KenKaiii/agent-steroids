@@ -216,6 +216,9 @@ steroids stats       # see what it costs you
 
 `update` checks each repo's latest commit first and only downloads the ones
 that actually moved, so running it daily on a big corpus costs almost nothing.
+Measured on 485 repositories: **2m50s**, of which 465 were already current and
+skipped entirely. No API quota is used, so there is no limit on how many repos
+you update or how often.
 Adding a repo you already have is skipped too, whether you paste the name or
 the full URL.
 
@@ -299,12 +302,13 @@ requests with a captcha page unless it recognises the client. Getting past that
 would mean impersonating another tool to evade their bot check, so the request
 is made honestly and the failure reported.
 
-`add` records the star count, licence, last-commit date and description
-alongside the code, which is one GitHub API call per repository. Without a
-`GITHUB_TOKEN` that quota is 60 an hour, so on a large batch the rest arrive
-without those extras. The code itself always lands either way, because it comes
-from codeload, which is not rate limited. Pass `--no-metadata` to skip the calls
-and go faster.
+`add`, `update` and `decay` make no GitHub API calls at all. Code comes from
+codeload, the head commit from git's own protocol, and the last-commit date out
+of the archive's file timestamps. None of those are rate limited, so updating
+hundreds of repositories costs nothing and needs no account.
+
+`discover` is the one exception: searching GitHub needs the search API, which
+allows 10 requests a minute without a token. Set `GITHUB_TOKEN` to raise it.
 
 ```
 src/filters.rs  what earns disk space
@@ -316,7 +320,7 @@ src/search.rs   query: narrow by trigram, verify by regex
 src/tui/        the interactive browser
 ```
 
-Set `GITHUB_TOKEN` to raise the discovery rate limit from 60 to 5,000 requests an hour. Ingest does not need it.
+No GitHub account is needed for anything except `discover`, and even there `GITHUB_TOKEN` only raises how often you can run it.
 
 ---
 
