@@ -42,7 +42,10 @@ impl Default for Config {
             auto_discover: false,
             discover_query: "topic:ai-agents".into(),
             discover_limit: 25,
-            min_stars: 100,
+            // High enough that a project has been used and reviewed by real
+            // teams, low enough to keep good niche libraries. Lists and
+            // courses are excluded separately, since they out-star everything.
+            min_stars: 500,
             // Two years. Old enough to keep stable, finished libraries;
             // recent enough to exclude code that predates current practice.
             max_age_months: 24,

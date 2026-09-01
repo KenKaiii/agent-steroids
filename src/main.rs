@@ -163,6 +163,9 @@ enum Command {
         /// Index everything found, rather than just listing it
         #[arg(long)]
         add: bool,
+        /// Label whatever is indexed, e.g. --tag terraform
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -592,6 +595,7 @@ fn main() -> Result<()> {
             min_stars,
             limit,
             add,
+            tag,
             json,
         } => {
             let settings = config::Config::load(&store)?;
@@ -655,6 +659,16 @@ fn main() -> Result<()> {
                 // that succeeded: they are on disk and need indexing.
                 let failures =
                     ingest_all(&mut store, &names, false, parallel, &Default::default())?;
+                // Label what landed, so a discovery run is immediately
+                // searchable as a group.
+                if !tag.is_empty() {
+                    for name in &names {
+                        if let Ok(repo) = fetch::normalize_repo(name) {
+                            store.tag_repo(&repo, &tag)?;
+                        }
+                    }
+                    eprintln!("  tagged: {}", tag.join(", "));
+                }
                 eprintln!("  next: steroids index");
                 if failures == names.len() {
                     std::process::exit(1);

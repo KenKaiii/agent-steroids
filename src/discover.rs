@@ -18,6 +18,72 @@ pub struct Candidate {
     pub description: String,
 }
 
+/// Words that mark a repository as a reading list rather than a codebase.
+///
+/// These score extremely well on stars, so a star threshold does not filter
+/// them: `awesome-python` has 300k stars and no Python worth reading. A corpus
+/// exists to show an agent how working code is written, and a curated list of
+/// links teaches it nothing.
+const CURATION_MARKERS: &[&str] = &[
+    "awesome",
+    "tutorial",
+    "course",
+    "roadmap",
+    "cheatsheet",
+    "cheat-sheet",
+    "interview",
+    "handbook",
+    "guide",
+    "curriculum",
+    "learn-",
+    "-learning",
+    "system-design",
+    "project-based",
+    "free-programming",
+    "public-apis",
+    "every-programmer",
+    "coding-interview",
+    "study-plan",
+    "-notes",
+    "bookmarks",
+    "resources",
+    "collection",
+    "list-of",
+    "papers",
+    "prompts",
+    "-books",
+    "ebook",
+];
+
+/// Whether a repository is a list or a course rather than a working project.
+///
+/// Judged on the name and description, since both are what the author chose to
+/// call it. Deliberately conservative: a false positive costs one candidate,
+/// while a false negative fills the corpus with markdown.
+pub fn is_curation(repo: &str, description: &str) -> bool {
+    let name = repo.rsplit('/').next().unwrap_or(repo).to_lowercase();
+    if CURATION_MARKERS.iter().any(|word| name.contains(word)) {
+        return true;
+    }
+    // A description that announces itself as a list, even under a neutral name.
+    let text = description.to_lowercase();
+    const PHRASES: &[&str] = &[
+        "curated list",
+        "awesome list",
+        "collection of resources",
+        "list of resources",
+        "learning path",
+        "roadmap to",
+        "interview questions",
+        "study guide",
+        "share interesting",
+        "open source projects",
+        "everything you need to know",
+        "best practices for learning",
+    ];
+    PHRASES.iter().any(|phrase| text.contains(phrase))
+}
+
 /// Search GitHub for repositories matching `query`.
 ///
 /// `query` is raw search qualifiers, e.g. `topic:ai-agents language:python`.
@@ -70,17 +136,23 @@ pub fn search(
             // The API is a network boundary; its names still have to survive
             // the same validation as anything a user types.
             fetch::validate_repo(repo).ok()?;
+
+            let description = item["description"].as_str().unwrap_or("");
+            if is_curation(repo, description) {
+                return None;
+            }
+            // A repository GitHub cannot assign a language to holds no code
+            // worth indexing, whatever its star count.
+            let language = item["language"].as_str()?;
+            if matches!(language, "Markdown" | "Text" | "HTML" | "Jupyter Notebook") {
+                return None;
+            }
             Some(Candidate {
                 repo: repo.to_string(),
                 stars: item["stargazers_count"].as_i64().unwrap_or(0),
                 pushed_at: item["pushed_at"].as_str().unwrap_or_default().to_string(),
-                language: item["language"].as_str().unwrap_or("-").to_string(),
-                description: item["description"]
-                    .as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(100)
-                    .collect(),
+                language: language.to_string(),
+                description: description.chars().take(100).collect(),
             })
         })
         .collect())
@@ -156,6 +228,61 @@ fn urlencode(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Lists and courses out-star real projects, so a star threshold alone
+    /// lets them straight in. `awesome-python` has 300k stars and no Python
+    /// worth reading.
+    #[test]
+    fn rejects_lists_and_courses() {
+        for (repo, description) in [
+            ("vinta/awesome-python", ""),
+            ("public-apis/public-apis", ""),
+            ("donnemartin/system-design-primer", ""),
+            ("practical-tutorials/project-based-learning", ""),
+            ("kamranahmedse/developer-roadmap", ""),
+            ("neutral/name", "A curated list of amazing tools"),
+            ("another/repo", "Interview questions for engineers"),
+        ] {
+            assert!(
+                super::is_curation(repo, description),
+                "let a list through: {repo}"
+            );
+        }
+    }
+
+    /// Real projects must not be caught by the same filter.
+    #[test]
+    fn keeps_real_projects() {
+        for (repo, description) in [
+            ("psf/requests", "A simple, yet elegant, HTTP library."),
+            (
+                "openai/codex",
+                "Lightweight coding agent that runs in your terminal",
+            ),
+            (
+                "hashicorp/terraform",
+                "Terraform enables you to safely build infrastructure",
+            ),
+            (
+                "BurntSushi/ripgrep",
+                "Recursively searches directories for a regex pattern",
+            ),
+            (
+                "tokio-rs/tokio",
+                "A runtime for writing reliable asynchronous applications",
+            ),
+            // "guide" appears in the description but it is a real library.
+            (
+                "some/lib",
+                "A library that will guide requests to the right handler",
+            ),
+        ] {
+            assert!(
+                !super::is_curation(repo, description),
+                "rejected a real project: {repo}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
