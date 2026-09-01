@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Your coding agent writes last year's code. This fixes it in 2 minutes.</strong>
+  <strong>Your coding agent writes last year's code. One command fixes it.</strong>
 </p>
 
 <p align="center">
@@ -38,9 +38,9 @@ Real projects, downloaded to your machine. Your agent **reads them before it wri
 
 | | Before | After |
 |---|---|---|
-| Where the code comes from | a year-old memory | repos updated this week |
+| Where its code comes from | a year-old memory | repos updated this week |
 | Ask it for a rate limiter | it guesses one | it reads 4 real ones first |
-| Cost of a search | your credibility | 9 milliseconds |
+| When it doesn't know | it makes something up | it says so, and finds repos |
 
 ## ⚡ Why not a hosted tool?
 
@@ -126,7 +126,7 @@ steroids add --from-file starter-repos.txt
 steroids index
 ```
 
-TypeScript, Python, Rust, Go, React, Next.js, AI agents, RAG, MCP, databases, DevOps, security, mobile, game dev. Thirty categories. Every repo was checked: not archived, not a fork, committed to within the year, well starred.
+TypeScript, Python, Rust, Go, React, Next.js, AI agents, RAG, MCP, databases, DevOps, security, mobile, game dev. Thirty categories. Every repo was checked: not archived, not a fork, committed to within the last year, well starred.
 
 Takes about 25 minutes. Too much? The file is grouped by category with comments, so delete the sections you don't care about. One section is closer to 100 MB and a couple of minutes.
 
@@ -138,6 +138,7 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 |---|---|
 | `steroids` | The full interface. Browse repos, search as you type |
 | `steroids add <repo>` | Add a repo. Pasting a GitHub URL works too |
+| `steroids index` | Run this after adding. Makes it all searchable |
 | `steroids discover 'topic:ai-agents'` | Finds good repos for you. Add `--add` to take them |
 | `steroids search '<regex>'` | Search everything, results spread across projects |
 | `steroids recent --hours 72` | What these projects shipped in the last 3 days |
