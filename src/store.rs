@@ -707,11 +707,22 @@ impl Store {
         // Deriving it cost 142ms across 442 repositories, because a correlated
         // subquery builds a temporary B-tree per repository and the grouped
         // alternative scans every document. It changes only when a repository
-        // is re-ingested, so it is recorded then.
+        // is re-ingested, so `refresh_languages` records it at index time.
+        //
+        // The subquery stays as a fallback for the two cases where nothing has
+        // recorded it yet: a corpus carried over from a build before the column
+        // existed, and a repository added but not yet indexed. COALESCE skips
+        // it entirely once the column is set, so a populated corpus pays
+        // nothing for it.
         let mut statement = self.db.prepare(
             "SELECT r.name, COALESCE(r.commit_sha, ''), COALESCE(r.indexed_at, ''), \
              COUNT(d.id), COALESCE(SUM(d.raw_size), 0), COALESCE(SUM(d.length), 0), \
-             COALESCE(r.pushed_at, ''), COALESCE(r.tags, ''), COALESCE(r.language, '-') \
+             COALESCE(r.pushed_at, ''), COALESCE(r.tags, ''), \
+             COALESCE(r.language, ( \
+                 SELECT language FROM documents \
+                 WHERE repo_id = r.id AND offset >= 0 \
+                 GROUP BY language ORDER BY SUM(raw_size) DESC LIMIT 1 \
+             ), '-') \
              FROM repos r LEFT JOIN documents d ON d.repo_id = r.id \
              GROUP BY r.id ORDER BY r.name",
         )?;

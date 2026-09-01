@@ -120,6 +120,18 @@ fn read_marker(store: &Store, key: &str) -> Result<i64> {
         .unwrap_or(0))
 }
 
+/// Buffered posting entries before the batch is written out.
+///
+/// A rebuild used to hold every posting in memory at once, which measured at
+/// 7GB for 443 repositories and rules out the larger corpora this is meant to
+/// serve. Google's codesearch bounds the same buffer and merges spilled runs;
+/// we already merge batches for incremental indexing, so the batch path is
+/// reused rather than adding a second sorter.
+///
+/// 128M entries is roughly 1.4GB by measurement. Lower means less memory and
+/// more re-encoding of the long lists that span every batch.
+const FLUSH_THRESHOLD: usize = 128_000_000;
+
 fn build_from(
     store: &mut Store,
     after: i64,
@@ -131,6 +143,13 @@ fn build_from(
     let stale_before = read_marker(store, "stale_postings")?;
     if full {
         store.db.execute("DELETE FROM postings", [])?;
+        // The postings this pointed at are gone. Left as it was, an
+        // interruption before the first batch would leave the next run
+        // extending an index that no longer exists.
+        store.db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('indexed_upto', ?1)",
+            params![b"0".to_vec()],
+        )?;
     }
 
     let doc_ids: Vec<i64> = store
@@ -139,89 +158,55 @@ fn build_from(
         .query_map(params![after], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
 
-    let mut postings: HashMap<[u8; 3], Vec<i64>> = HashMap::new();
-    for (count, doc_id) in doc_ids.iter().enumerate() {
-        let content = store.read_document(*doc_id)?;
-        for gram in trigrams(&content) {
-            postings.entry(gram).or_default().push(*doc_id);
-        }
-        if count % 500 == 0 {
-            progress(count, doc_ids.len());
-        }
-    }
-
     let total: i64 = store.db.query_row(
         "SELECT COUNT(*) FROM documents WHERE offset >= 0",
         [],
         |row| row.get(0),
     )?;
     let cutoff = ((total as f64 * MAX_DOCUMENT_FRACTION) as usize).max(1);
-    let mut stored = 0usize;
-    let mut dropped: Vec<u8> = Vec::new();
 
     // Trigrams already dropped for being too common stay dropped: re-adding
     // them from a small batch would claim a term is rare when the corpus knows
-    // otherwise.
-    let stop: std::collections::HashSet<[u8; 3]> = if full {
+    // otherwise. A full run starts with no such history and rediscovers it.
+    let mut stop: std::collections::HashSet<[u8; 3]> = if full {
         Default::default()
     } else {
         read_stop_trigrams(store)?
     };
 
-    let transaction = store.db.unchecked_transaction()?;
-    {
-        let mut existing =
-            transaction.prepare("SELECT doc_ids FROM postings WHERE trigram = ?1")?;
-        let mut insert = transaction.prepare(
-            "INSERT OR REPLACE INTO postings (trigram, doc_ids, doc_count) \
-             VALUES (?1, ?2, ?3)",
-        )?;
-        for (gram, ids) in &postings {
-            if stop.contains(gram) {
-                dropped.extend_from_slice(gram);
+    let mut postings: HashMap<[u8; 3], Vec<i64>> = HashMap::new();
+    let mut seen: std::collections::HashSet<[u8; 3]> = Default::default();
+    let mut buffered = 0usize;
+    for (count, doc_id) in doc_ids.iter().enumerate() {
+        let content = store.read_document(*doc_id)?;
+        for gram in trigrams(&content) {
+            seen.insert(gram);
+            // Buffering a trigram already known to be too common wastes the
+            // memory this batching exists to save, and it holds the longest
+            // lists of all.
+            if stop.contains(&gram) {
                 continue;
             }
-            // Merge rather than replace, so earlier documents keep their entry.
-            let mut merged = if full {
-                Vec::new()
-            } else {
-                existing
-                    .query_row(params![gram.as_slice()], |row| row.get::<_, Vec<u8>>(0))
-                    .ok()
-                    .map(|blob| decode(&blob))
-                    .transpose()?
-                    .unwrap_or_default()
-            };
-            merged.extend_from_slice(ids);
-            merged.sort_unstable();
-            merged.dedup();
+            postings.entry(gram).or_default().push(*doc_id);
+            buffered += 1;
+        }
+        if buffered >= FLUSH_THRESHOLD {
+            flush_batch(store, &mut postings, &mut stop, cutoff, *doc_id)?;
+            buffered = 0;
+        }
+        if count % 500 == 0 {
+            progress(count, doc_ids.len());
+        }
+    }
+    let highest_indexed = doc_ids.last().copied().unwrap_or(after);
+    flush_batch(store, &mut postings, &mut stop, cutoff, highest_indexed)?;
 
-            if merged.len() > cutoff {
-                dropped.extend_from_slice(gram);
-                // A trigram that has become too common must not keep its old
-                // entry, or queries would narrow on a fraction of the corpus.
-                transaction.execute(
-                    "DELETE FROM postings WHERE trigram = ?1",
-                    params![gram.as_slice()],
-                )?;
-                continue;
-            }
-            insert.execute(params![
-                gram.as_slice(),
-                encode(&merged)?,
-                merged.len() as i64
-            ])?;
-            stored += 1;
-        }
-    }
-    if !full {
-        // Keep the trigrams dropped by earlier runs alongside this run's.
-        let mut all = read_stop_trigrams(store)?;
-        for &gram in dropped.as_chunks::<3>().0 {
-            all.insert(gram);
-        }
-        dropped = all.into_iter().flatten().collect();
-    }
+    // Every trigram seen that was not dropped is now stored, so this needs no
+    // separate tally to drift out of step with what was written.
+    let stored = seen.difference(&stop).count();
+    let dropped: Vec<u8> = stop.iter().flatten().copied().collect();
+
+    let transaction = store.db.unchecked_transaction()?;
     transaction.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('stop_trigrams', ?1)",
         params![dropped],
@@ -257,9 +242,83 @@ fn build_from(
     let total = total as usize;
     Ok(IndexStats {
         documents: total,
-        trigrams_seen: postings.len(),
+        trigrams_seen: seen.len(),
         trigrams_stored: stored,
     })
+}
+
+/// Merge one batch of buffered postings into the index and clear the buffer.
+///
+/// Committing per batch rather than once at the end is what bounds memory, and
+/// it also makes an interrupted rebuild resumable: `indexed_upto` moves with
+/// the data, so the next run continues from the last batch instead of
+/// extending an index that was never finished.
+fn flush_batch(
+    store: &mut Store,
+    postings: &mut HashMap<[u8; 3], Vec<i64>>,
+    stop: &mut std::collections::HashSet<[u8; 3]>,
+    cutoff: usize,
+    indexed_upto: i64,
+) -> Result<()> {
+    let transaction = store.db.unchecked_transaction()?;
+    {
+        let mut existing =
+            transaction.prepare("SELECT doc_ids FROM postings WHERE trigram = ?1")?;
+        let mut insert = transaction.prepare(
+            "INSERT OR REPLACE INTO postings (trigram, doc_ids, doc_count) \
+             VALUES (?1, ?2, ?3)",
+        )?;
+        for (gram, ids) in postings.iter() {
+            if stop.contains(gram) {
+                continue;
+            }
+            // Merge rather than replace, so documents indexed by an earlier
+            // batch or an earlier run keep their entry.
+            let mut merged = existing
+                .query_row(params![gram.as_slice()], |row| row.get::<_, Vec<u8>>(0))
+                .ok()
+                .map(|blob| decode(&blob))
+                .transpose()?
+                .unwrap_or_default();
+            // Skipping the sort when a batch's ids are all higher than the
+            // stored ones, which is the common case, was measured at 182s
+            // against 184s: the cost is re-encoding the lists, not ordering
+            // them. Not worth the branch.
+            merged.extend_from_slice(ids);
+            merged.sort_unstable();
+            merged.dedup();
+
+            if merged.len() > cutoff {
+                stop.insert(*gram);
+                // A trigram that has become too common must not keep its old
+                // entry, or queries would narrow on a fraction of the corpus.
+                transaction.execute(
+                    "DELETE FROM postings WHERE trigram = ?1",
+                    params![gram.as_slice()],
+                )?;
+                continue;
+            }
+            insert.execute(params![
+                gram.as_slice(),
+                encode(&merged)?,
+                merged.len() as i64
+            ])?;
+        }
+    }
+    // Both are part of the batch: a resumed run needs the stop list that the
+    // committed postings were written under, not a later or earlier one.
+    let flat: Vec<u8> = stop.iter().flatten().copied().collect();
+    transaction.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('stop_trigrams', ?1)",
+        params![flat],
+    )?;
+    transaction.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('indexed_upto', ?1)",
+        params![indexed_upto.to_string().into_bytes()],
+    )?;
+    transaction.commit()?;
+    postings.clear();
+    Ok(())
 }
 
 /// Trigrams the index has already rejected for being too common.

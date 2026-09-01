@@ -52,6 +52,10 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "pattern": pattern,
         "count": 0,
+        // Always present so both result shapes carry the same keys: a caller
+        // reading `more_available` should not have to handle it going missing
+        // just because the search happened to find nothing.
+        "more_available": false,
         "matches": [],
         "reason": reason,
         "suggestion": suggestion,
