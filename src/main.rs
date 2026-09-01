@@ -545,8 +545,14 @@ fn main() -> Result<()> {
         Command::Decay { months, dry_run } => {
             let settings = config::Config::load(&store)?;
             let months = months.unwrap_or(settings.decay_months);
-            if months == 0 {
-                println!("  decay is off. Enable with: steroids config decay_months 6");
+            // Age and archived are separate rules. Removing repositories the
+            // owner has frozen should not require opting into an age limit,
+            // since an archive will never improve no matter how recent it is.
+            if months == 0 && !settings.decay_archived {
+                println!(
+                    "  decay is off. Enable with: steroids config decay_months 6 \
+                     (archived repos are removed by default)"
+                );
                 return Ok(());
             }
 
@@ -556,11 +562,21 @@ fn main() -> Result<()> {
                 .unwrap_or(0);
             // Months as 30 days: exact calendar months are not worth a date
             // dependency for a threshold the user picks in round numbers.
-            let cutoff = discover::iso_date(now.saturating_sub(months as u64 * 30 * 86_400));
+            // An age of zero means no age rule at all, so use a cutoff no
+            // stored date can precede.
+            let cutoff = if months == 0 {
+                "0000-00-00".to_string()
+            } else {
+                discover::iso_date(now.saturating_sub(months as u64 * 30 * 86_400))
+            };
             let stale = store.stale_repos(&cutoff, settings.decay_archived)?;
 
             if stale.is_empty() {
-                println!("  nothing older than {months} months (cutoff {cutoff})");
+                if months == 0 {
+                    println!("  no archived repositories");
+                } else {
+                    println!("  nothing older than {months} months (cutoff {cutoff})");
+                }
                 return Ok(());
             }
             for (name, pushed, archived) in &stale {

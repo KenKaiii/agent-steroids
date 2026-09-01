@@ -202,7 +202,15 @@ steroids decay --dry-run
 steroids decay
 ```
 
-That measures from the last actual commit, not from when you added it. Dry run first, always.
+That measures from the repo's **last commit**, not from when it was created or
+when you added it. A library first published in 2011 but committed to yesterday
+counts as fresh; one started last year and then abandoned does not.
+
+Repos the owner has archived are dropped whatever their age, since an archive
+is frozen upstream and will never get another fix. That happens even with
+`decay_months` at 0, and discovery never suggests them in the first place.
+
+Dry run first, always.
 
 ## ⚙️ All the settings
 
@@ -214,7 +222,7 @@ steroids config min_stars 500    # change one
 | Setting | Default | What it does |
 |---|---|---|
 | `decay_months` | `0` | Drop repos with no commits in N months. 0 means never |
-| `decay_archived` | `false` | Also drop repos the owner shut down |
+| `decay_archived` | `true` | Also drop repos the owner has archived |
 | `auto_discover` | `false` | Top up with new repos on every update |
 | `discover_query` | `topic:ai-agents` | What to look for when discovering |
 | `discover_limit` | `25` | Cap on how many one discovery run adds |

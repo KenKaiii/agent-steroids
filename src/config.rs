@@ -35,7 +35,10 @@ impl Default for Config {
             // Off by default: silently deleting a user's data is not a sane
             // out-of-the-box behaviour.
             decay_months: 0,
-            decay_archived: false,
+            // An archived repository is frozen upstream: it will never gain a
+            // fix or a new pattern, so keeping it only feeds the agent code
+            // that is guaranteed not to improve.
+            decay_archived: true,
             auto_discover: false,
             discover_query: "topic:ai-agents".into(),
             discover_limit: 25,

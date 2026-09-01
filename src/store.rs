@@ -566,10 +566,15 @@ impl Store {
         cutoff: &str,
         include_archived: bool,
     ) -> Result<Vec<(String, String, bool)>> {
+        // Two independent reasons to drop a repository, so they are ORed with
+        // their own guards. Age needs a known commit date, since deleting on
+        // missing information would be wrong. Being archived needs no date at
+        // all: the upstream is frozen whatever its history says.
         let mut statement = self.db.prepare(
-            "SELECT name, pushed_at, COALESCE(archived, 0) FROM repos \
-             WHERE pushed_at IS NOT NULL AND pushed_at <> '' \
-             AND (substr(pushed_at, 1, 10) < ?1 OR (?2 AND archived = 1)) \
+            "SELECT name, COALESCE(pushed_at, ''), COALESCE(archived, 0) FROM repos \
+             WHERE (pushed_at IS NOT NULL AND pushed_at <> '' \
+                    AND substr(pushed_at, 1, 10) < ?1) \
+                OR (?2 AND archived = 1) \
              ORDER BY pushed_at",
         )?;
         let rows = statement
@@ -699,6 +704,7 @@ mod tests {
             [],
         )?;
 
+        // Archived removal off: only the age rule should fire.
         let stale: Vec<String> = store
             .stale_repos("2026-01-01", false)?
             .into_iter()
@@ -710,12 +716,24 @@ mod tests {
             "wrong set without archived"
         );
 
+        // An archived repository with no commit date must still be caught:
+        // frozen upstream is reason enough, no date required.
+        store.db.execute(
+            "INSERT INTO repos (name, commit_sha, indexed_at, archived) \
+             VALUES ('dead/repo', 'e', datetime('now'), 1)",
+            [],
+        )?;
+
         let with_archived: Vec<String> = store
             .stale_repos("2026-01-01", true)?
             .into_iter()
             .map(|(name, ..)| name)
             .collect();
         assert!(with_archived.contains(&"archived/repo".to_string()));
+        assert!(
+            with_archived.contains(&"dead/repo".to_string()),
+            "archived repo with no commit date was kept"
+        );
         assert!(
             !with_archived.contains(&"legacy/repo".to_string()),
             "deleted on unknown date"
