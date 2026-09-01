@@ -205,8 +205,8 @@ fn build_from(
     if !full {
         // Keep the trigrams dropped by earlier runs alongside this run's.
         let mut all = read_stop_trigrams(store)?;
-        for gram in dropped.chunks_exact(3) {
-            all.insert([gram[0], gram[1], gram[2]]);
+        for &gram in dropped.as_chunks::<3>().0 {
+            all.insert(gram);
         }
         dropped = all.into_iter().flatten().collect();
     }
