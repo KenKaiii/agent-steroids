@@ -26,6 +26,12 @@ pub fn trigrams(content: &[u8]) -> HashSet<[u8; 3]> {
 }
 
 /// Delta + varint, then zstd. Sorted ids delta down to tiny numbers.
+///
+/// Whole-list rather than blocked. Tantivy bitpacks postings in blocks of 128
+/// with an offset index, which lets a query seek into a list without decoding
+/// the rest. That matters when scoring wants to skip ahead; our queries always
+/// intersect entire lists, and decoding one measures at 0.2ms for 220,000 ids,
+/// so the block index would cost complexity and save nothing.
 fn encode(doc_ids: &[i64]) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(doc_ids.len() * 2);
     let mut previous = 0i64;
