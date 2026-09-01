@@ -29,6 +29,13 @@ const DICT_SIZE_BYTES: usize = 110 * 1024;
 /// Below this, zstd cannot derive a useful dictionary and fails.
 const MIN_DICT_SAMPLES: usize = 8;
 
+/// Note on `postings.doc_count`: it records how many documents a posting list
+/// holds, so a query can order its intersections without decompressing
+/// anything. Compressed length only correlates with the count, and two lists of
+/// the same size can differ several fold in entries.
+///
+/// Comments live here rather than inline: statements are split on `;`, so a
+/// trailing SQL comment is carried into the next statement and breaks it.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB);
 CREATE TABLE IF NOT EXISTS repos (
@@ -60,6 +67,7 @@ CREATE TABLE IF NOT EXISTS postings (
     trigram BLOB PRIMARY KEY,
     doc_ids BLOB NOT NULL
 );
+ALTER TABLE postings ADD COLUMN doc_count INTEGER;
 ";
 
 /// What the corpus knows about one indexed repository.

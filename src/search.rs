@@ -371,8 +371,12 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
     if sized.is_empty() {
         return Ok(None);
     }
-    sized.sort_unstable_by_key(|(_, bytes)| *bytes);
+    sized.sort_unstable_by_key(|(_, count)| *count);
 
+    // Skipping the least selective trigrams outright was tried and measured
+    // slower: even a list covering a fifth of the corpus removes candidates
+    // the regex pass would otherwise have to read. Decode them all, smallest
+    // first, and stop early once the set is small enough.
     let mut best: Option<HashSet<i64>> = None;
     for (gram, _) in sized {
         let Some(ids) = posting(store, &gram)? else {
@@ -388,7 +392,11 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
                 } else {
                     (&ids, &previous)
                 };
-                small.iter().filter(|id| large.contains(id)).copied().collect()
+                small
+                    .iter()
+                    .filter(|id| large.contains(id))
+                    .copied()
+                    .collect()
             }
         });
         match best.as_ref() {
@@ -402,12 +410,18 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
     Ok(best)
 }
 
-/// Compressed size of a posting list, without decoding it.
+/// How many documents a posting list holds, without decoding it.
+///
+/// Stored alongside the list rather than derived from its compressed length:
+/// two lists of similar size can hold wildly different numbers of ids, and
+/// ordering the intersection well depends on knowing which is genuinely
+/// smaller. Falls back to the byte length for an index built before the count
+/// was recorded.
 fn posting_size(store: &Store, gram: &[u8; 3]) -> Result<Option<i64>> {
     Ok(store
         .db
         .query_row(
-            "SELECT LENGTH(doc_ids) FROM postings WHERE trigram = ?1",
+            "SELECT COALESCE(doc_count, LENGTH(doc_ids)) FROM postings WHERE trigram = ?1",
             params![gram.as_slice()],
             |row| row.get(0),
         )

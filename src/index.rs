@@ -166,8 +166,10 @@ fn build_from(
     {
         let mut existing =
             transaction.prepare("SELECT doc_ids FROM postings WHERE trigram = ?1")?;
-        let mut insert = transaction
-            .prepare("INSERT OR REPLACE INTO postings (trigram, doc_ids) VALUES (?1, ?2)")?;
+        let mut insert = transaction.prepare(
+            "INSERT OR REPLACE INTO postings (trigram, doc_ids, doc_count) \
+             VALUES (?1, ?2, ?3)",
+        )?;
         for (gram, ids) in &postings {
             if stop.contains(gram) {
                 dropped.extend_from_slice(gram);
@@ -198,7 +200,11 @@ fn build_from(
                 )?;
                 continue;
             }
-            insert.execute(params![gram.as_slice(), encode(&merged)?])?;
+            insert.execute(params![
+                gram.as_slice(),
+                encode(&merged)?,
+                merged.len() as i64
+            ])?;
             stored += 1;
         }
     }
