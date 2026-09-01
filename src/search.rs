@@ -15,6 +15,9 @@ const METACHARACTERS: &[char] = &[
 /// A pathological pattern can hang the matcher, so cap how much we feed it.
 const MAX_PATTERN_LENGTH: usize = 512;
 const MAX_CANDIDATES: usize = 20_000;
+/// Above this many narrowed ids, an `IN` list stops being cheaper than a scan
+/// and starts straining the SQL parser.
+const SQL_ID_LIMIT: usize = 50_000;
 /// Files read to confirm a literal really occurs, when diagnosing empty results.
 const FRAGMENT_CONFIRM_LIMIT: usize = 40;
 /// Lines of context shown either side of a match.
@@ -688,12 +691,37 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         candidates(store, pattern)?
     };
 
+    // The trigram index has usually narrowed to a handful of documents, so ask
+    // for those rather than every row in the corpus. Fetching all 638,000 and
+    // filtering in Rust cost 394ms of the 200ms budget on its own: SQLite can
+    // do this against its primary key instead.
+    let narrow_sql = narrowed
+        .as_ref()
+        .filter(|ids| ids.len() <= SQL_ID_LIMIT)
+        .map(|ids| {
+            let mut list = String::with_capacity(ids.len() * 8);
+            let mut sorted: Vec<i64> = ids.iter().copied().collect();
+            sorted.sort_unstable();
+            for (index, id) in sorted.iter().enumerate() {
+                if index > 0 {
+                    list.push(',');
+                }
+                // Values come from the index, not from user input, so they are
+                // integers by construction and safe to inline.
+                list.push_str(&id.to_string());
+            }
+            list
+        });
+
     let mut sql = String::from(
         "SELECT d.id, r.name, d.path, COALESCE(r.commit_sha, ''), d.language, \
          COALESCE(r.pushed_at, '') \
          FROM documents d JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
     );
     let mut binds: Vec<String> = Vec::new();
+    if let Some(ids) = &narrow_sql {
+        sql.push_str(&format!(" AND d.id IN ({ids})"));
+    }
     if let Some(repo) = query.repo {
         sql.push_str(" AND r.name = ?");
         binds.push(repo.to_string());
@@ -870,6 +898,34 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
 #[cfg(test)]
 mod tests {
+    /// Narrowing must not change what a search finds, only how fast it finds
+    /// it. Pushing the id filter into SQL is invisible when it works and
+    /// silently loses results when it does not.
+    #[test]
+    fn sql_narrowing_returns_the_same_results() -> anyhow::Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            println!("SKIP: set STEROIDS_TEST_ROOT to a populated corpus");
+            return Ok(());
+        }
+        let mut store = crate::store::Store::open(std::path::Path::new(&root))?;
+        // A rare term narrows to a short id list and takes the SQL path; a
+        // common one exceeds the limit and falls back to scanning. Both must
+        // agree with a plain substring check over the same documents.
+        for pattern in ["max_retries", "def ", "import"] {
+            let hits = super::search(&mut store, pattern, &super::Query::new(50))?;
+            for hit in hits.matches.iter() {
+                let joined = hit.context.join("\n");
+                assert!(
+                    joined.contains(pattern.trim())
+                        || !pattern.chars().all(|c| c.is_alphanumeric() || c == '_'),
+                    "{pattern}: returned a snippet that does not contain it: {joined:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Comparing how several projects solved a problem needs breadth, not
     /// depth: ten projects once each says more about common practice than
     /// three projects three times each.

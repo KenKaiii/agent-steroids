@@ -646,7 +646,12 @@ fn main() -> Result<()> {
             // width: a listing of several hundred short paths otherwise spends
             // most of its bytes on spaces, and a caller reading this is
             // usually a program.
-            let width = paths.iter().map(|(p, ..)| p.len()).max().unwrap_or(0).min(90);
+            let width = paths
+                .iter()
+                .map(|(p, ..)| p.len())
+                .max()
+                .unwrap_or(0)
+                .min(90);
             for (path, language, size) in &paths {
                 println!("  {path:<width$}  {language:<10} {}", human(*size as f64));
             }
