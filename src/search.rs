@@ -346,8 +346,45 @@ fn posting(store: &Store, gram: &[u8; 3]) -> Result<Option<Vec<i64>>> {
     blob.map(|bytes| decode(&bytes)).transpose()
 }
 
+/// Byte-level case variants of a trigram, for narrowing without case.
+///
+/// ASCII letters only, and not `k` or `s`. Anything else reports unfoldable
+/// and the trigram is left out of narrowing, which can only widen the
+/// candidate set: a non-ASCII letter changes its bytes when it changes case,
+/// and under the matcher's Unicode folding `k` also matches the Kelvin sign
+/// and `s` the long s, which no ASCII variant covers.
+fn case_variants(gram: &[u8; 3]) -> Option<Vec<[u8; 3]>> {
+    let foldable = gram
+        .iter()
+        .all(|byte| byte.is_ascii() && !matches!(byte.to_ascii_lowercase(), b'k' | b's'));
+    if !foldable {
+        return None;
+    }
+    let mut variants = vec![*gram];
+    for position in 0..3 {
+        if !gram[position].is_ascii_alphabetic() {
+            continue;
+        }
+        for index in 0..variants.len() {
+            let mut flipped = variants[index];
+            flipped[position] ^= 0x20;
+            variants.push(flipped);
+        }
+    }
+    Some(variants)
+}
+
 /// Documents that could match one branch, or None if it cannot narrow.
-fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>> {
+///
+/// With `fold` set, each trigram stands for the union of its case variants,
+/// which is how codesearch narrows a case-folded literal. A variant that was
+/// dropped as too common leaves the union incomplete, so such a trigram is
+/// skipped rather than narrowed on; skipping only widens the result.
+fn branch_candidates(
+    store: &Store,
+    branch: &str,
+    fold: Option<&HashSet<[u8; 3]>>,
+) -> Result<Option<HashSet<i64>>> {
     let runs = literals(branch);
     if runs.is_empty() {
         return Ok(None);
@@ -360,11 +397,31 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
     // with the most selective. Every later intersection then runs against a
     // set that is already small, and a rare trigram often reduces the answer
     // to a handful before the common ones are touched at all.
-    let mut sized: Vec<([u8; 3], i64)> = Vec::new();
+    let mut sized: Vec<(Vec<[u8; 3]>, i64)> = Vec::new();
     for run in &runs {
         for gram in trigrams(run.as_bytes()) {
-            if let Some(bytes) = posting_size(store, &gram)? {
-                sized.push((gram, bytes));
+            let variants = match fold {
+                None => vec![gram],
+                Some(stop) => {
+                    let Some(variants) = case_variants(&gram) else {
+                        continue;
+                    };
+                    if variants.iter().any(|variant| stop.contains(variant)) {
+                        continue;
+                    }
+                    variants
+                }
+            };
+            let mut total = 0i64;
+            let mut present = false;
+            for variant in &variants {
+                if let Some(count) = posting_size(store, variant)? {
+                    total += count;
+                    present = true;
+                }
+            }
+            if present {
+                sized.push((variants, total));
             }
         }
     }
@@ -378,10 +435,13 @@ fn branch_candidates(store: &Store, branch: &str) -> Result<Option<HashSet<i64>>
     // the regex pass would otherwise have to read. Decode them all, smallest
     // first, and stop early once the set is small enough.
     let mut best: Option<HashSet<i64>> = None;
-    for (gram, _) in sized {
-        let Some(ids) = posting(store, &gram)? else {
-            continue;
-        };
+    for (variants, _) in sized {
+        let mut ids: Vec<i64> = Vec::new();
+        for variant in &variants {
+            if let Some(list) = posting(store, variant)? {
+                ids.extend(list);
+            }
+        }
         best = Some(match best {
             None => ids.into_iter().collect(),
             Some(previous) => {
@@ -428,10 +488,21 @@ fn posting_size(store: &Store, gram: &[u8; 3]) -> Result<Option<i64>> {
         .ok())
 }
 
-fn candidates(store: &Store, pattern: &str) -> Result<Option<HashSet<i64>>> {
+fn candidates(store: &mut Store, pattern: &str, fold: bool) -> Result<Option<HashSet<i64>>> {
+    // Folding needs to tell a variant that never occurs from one dropped as
+    // too common. An index that predates stop-list tracking cannot, so the
+    // only safe answer there is to scan.
+    let stop: Option<HashSet<[u8; 3]>> = if fold {
+        match store.stop_trigrams() {
+            Some(stop) => Some(stop.clone()),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
     let mut combined = HashSet::new();
     for branch in alternatives(pattern) {
-        match branch_candidates(store, &branch)? {
+        match branch_candidates(store, &branch, stop.as_ref())? {
             // This branch could match anything, so narrowing would lose results.
             None => return Ok(None),
             Some(found) => combined.extend(found),
@@ -839,17 +910,15 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         });
     }
 
-    // Trigram narrowing is case-sensitive, so it would discard documents that a
-    // case-insensitive matcher should still find. Scan everything instead.
+    // Trigram narrowing is case-sensitive, so a case-insensitive query folds
+    // each trigram to its case variants before narrowing. Scanning everything
+    // instead cost 180ms and 185MB against 10ms and 18MB for the same query.
     //
     // The flag alone is not enough: a pattern can turn on case-insensitivity
-    // itself with an inline `(?i)`, and narrowing on that silently returns
-    // nothing at all rather than fewer results.
-    let narrowed = if query.ignore_case || has_inline_case_flag(pattern) {
-        None
-    } else {
-        candidates(store, pattern)?
-    };
+    // itself with an inline `(?i)`, and narrowing on that without folding
+    // silently returns nothing at all rather than fewer results.
+    let fold = query.ignore_case || has_inline_case_flag(pattern);
+    let narrowed = candidates(store, pattern, fold)?;
 
     // The trigram index has usually narrowed to a handful of documents, so ask
     // for those rather than every row in the corpus. Fetching all 638,000 and
@@ -1379,6 +1448,25 @@ mod tests {
     fn a_budget_that_fits_changes_nothing() {
         let rows = vec![(1, "a".to_string()), (2, "b".to_string())];
         assert_eq!(spread_across_repos(rows, 9, |row| row.1.as_str()).len(), 2);
+    }
+
+    #[test]
+    fn case_variants_cover_every_letter_combination() {
+        let variants = case_variants(b"a_b").unwrap();
+        assert_eq!(variants.len(), 4);
+        assert!(variants.contains(b"A_B"));
+        assert!(variants.contains(b"a_B"));
+        assert_eq!(case_variants(b"123").unwrap(), vec![*b"123"]);
+    }
+
+    #[test]
+    fn unfoldable_trigrams_are_left_out_of_narrowing() {
+        // The matcher folds k to the Kelvin sign and s to the long s, which no
+        // ASCII variant would find, so these must widen rather than narrow.
+        assert!(case_variants(b"key").is_none());
+        assert!(case_variants(b"ISO").is_none());
+        // A non-ASCII letter changes its bytes when it changes case.
+        assert!(case_variants("é_x".as_bytes()[..3].try_into().unwrap()).is_none());
     }
 
     #[test]
