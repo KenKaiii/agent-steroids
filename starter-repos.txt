@@ -21,552 +21,552 @@
 # the rest still land; re-run the same command and only the missing ones are
 # fetched.
 
-# --- ai-agents -------------------------------------------------
-browser-use/browser-use                          # 111k stars, Python
-bytedance/deer-flow                              # 81k stars, Python
-ruvnet/ruflo                                     # 70k stars, TypeScript
-code-yeongyu/oh-my-openagent                     # 68k stars, TypeScript
-Mintplex-Labs/anything-llm                       # 65k stars, JavaScript
-shanraisshan/claude-code-best-practice           # 65k stars, HTML
-mem0ai/mem0                                      # 64k stars, Python
-asgeirtj/system_prompts_leaks                    # 63k stars, JavaScript
-diegosouzapw/OmniRoute                           # 59k stars, TypeScript
-stablyai/orca                                    # 58k stars, TypeScript
+# --- ai-agents -----------------------------------------------------
+browser-use/browser-use                            #  111861 stars  Python       2026-08-31
+bytedance/deer-flow                                #   81182 stars  Python       2026-08-31
+ruvnet/ruflo                                       #   70015 stars  TypeScript   2026-08-31
+code-yeongyu/oh-my-openagent                       #   68563 stars  TypeScript   2026-08-31
+Mintplex-Labs/anything-llm                         #   65437 stars  JavaScript   2026-08-31
+shanraisshan/claude-code-best-practice             #   65432 stars  HTML         2026-08-31
+mem0ai/mem0                                        #   64447 stars  Python       2026-08-31
+asgeirtj/system_prompts_leaks                      #   63892 stars  JavaScript   2026-08-30
+diegosouzapw/OmniRoute                             #   59296 stars  TypeScript   2026-08-31
+stablyai/orca                                      #   58400 stars  TypeScript   2026-09-01
 
-# --- api -------------------------------------------------------
-neovim/neovim                                    # 102k stars, Vim Script
-fastapi/fastapi                                  # 101k stars, Python
-ocornut/imgui                                    # 75k stars, C++
-strapi/strapi                                    # 73k stars, TypeScript
-ccxt/ccxt                                        # 43k stars, Python
-Kong/insomnia                                    # 39k stars, TypeScript
-songquanpeng/one-api                             # 36k stars, JavaScript
-hasura/graphql-engine                            # 32k stars, TypeScript
-encode/django-rest-framework                     # 30k stars, Python
-pppscn/SmsForwarder                              # 27k stars, Kotlin
-PostgREST/postgrest                              # 27k stars, Haskell
-OpenAPITools/openapi-generator                   # 26k stars, Java
-Skyvern-AI/skyvern                               # 22k stars, Python
-go-chi/chi                                       # 22k stars, Go
+# --- api -----------------------------------------------------------
+neovim/neovim                                      #  102045 stars  Vim Script   2026-08-31
+fastapi/fastapi                                    #  101977 stars  Python       2026-08-26
+ocornut/imgui                                      #   75980 stars  C++          2026-08-31
+strapi/strapi                                      #   73049 stars  TypeScript   2026-08-31
+ccxt/ccxt                                          #   43824 stars  Python       2026-08-31
+Kong/insomnia                                      #   39964 stars  TypeScript   2026-08-31
+songquanpeng/one-api                               #   36661 stars  JavaScript   2026-01-09
+hasura/graphql-engine                              #   32110 stars  TypeScript   2026-08-19
+encode/django-rest-framework                       #   30151 stars  Python       2026-08-25
+pppscn/SmsForwarder                                #   27784 stars  Kotlin       2026-08-31
+PostgREST/postgrest                                #   27638 stars  Haskell      2026-08-30
+OpenAPITools/openapi-generator                     #   26709 stars  Java         2026-08-31
+Skyvern-AI/skyvern                                 #   22891 stars  Python       2026-09-01
+go-chi/chi                                         #   22760 stars  Go           2026-08-31
 
-# --- cli -------------------------------------------------------
-ohmyzsh/ohmyzsh                                  # 189k stars, Shell
-sherlock-project/sherlock                        # 90k stars, Python
-Raphire/Win11Debloat                             # 56k stars, PowerShell
-Aider-AI/aider                                   # 48k stars, Python
-cli/cli                                          # 46k stars, Go
-google/zx                                        # 45k stars, JavaScript
-charmbracelet/bubbletea                          # 44k stars, Go
-spf13/cobra                                      # 44k stars, Go
-sharkdp/fd                                       # 44k stars, Rust
+# --- cli -----------------------------------------------------------
+ohmyzsh/ohmyzsh                                    #  189483 stars  Shell        2026-08-30
+sherlock-project/sherlock                          #   90725 stars  Python       2026-08-31
+Raphire/Win11Debloat                               #   56543 stars  PowerShell   2026-08-30
+Aider-AI/aider                                     #   48635 stars  Python       2026-05-22
+cli/cli                                            #   46090 stars  Go           2026-08-31
+google/zx                                          #   45715 stars  JavaScript   2026-08-14
+charmbracelet/bubbletea                            #   44725 stars  Go           2026-08-31
+spf13/cobra                                        #   44545 stars  Go           2026-07-11
+sharkdp/fd                                         #   44265 stars  Rust         2026-08-28
 
-# --- compiler --------------------------------------------------
-webpack/webpack                                  # 65k stars, JavaScript
-typst/typst                                      # 55k stars, Rust
-JetBrains/kotlin                                 # 53k stars, Kotlin
-parcel-bundler/parcel                            # 44k stars, JavaScript
-babel/babel                                      # 43k stars, TypeScript
-ziglang/zig                                      # 43k stars, Zig
-evanw/esbuild                                    # 40k stars, Go
-vlang/v                                          # 37k stars, V
-markedjs/marked                                  # 37k stars, JavaScript
-swc-project/swc                                  # 34k stars, Rust
-carbon-language/carbon-lang                      # 33k stars, C++
-v8/v8                                            # 25k stars, C++
-oxc-project/oxc                                  # 22k stars, Rust
-RustPython/RustPython                            # 22k stars, Rust
-gleam-lang/gleam                                 # 21k stars, Rust
-oracle/graal                                     # 21k stars, Java
-crystal-lang/crystal                             # 20k stars, Crystal
-compiler-explorer/compiler-explorer              # 19k stars, TypeScript
-nim-lang/Nim                                     # 18k stars, Nim
-AssemblyScript/assemblyscript                    # 17k stars, WebAssembly
+# --- compiler ------------------------------------------------------
+webpack/webpack                                    #   65962 stars  JavaScript   2026-08-31
+typst/typst                                        #   55766 stars  Rust         2026-08-31
+JetBrains/kotlin                                   #   53371 stars  Kotlin       2026-08-31
+parcel-bundler/parcel                              #   44025 stars  JavaScript   2026-08-30
+babel/babel                                        #   43989 stars  TypeScript   2026-08-31
+ziglang/zig                                        #   43313 stars  Zig          2025-11-27
+evanw/esbuild                                      #   40031 stars  Go           2026-08-09
+vlang/v                                            #   37809 stars  V            2026-09-01
+markedjs/marked                                    #   37110 stars  JavaScript   2026-08-31
+swc-project/swc                                    #   34191 stars  Rust         2026-08-28
+carbon-language/carbon-lang                        #   33869 stars  C++          2026-08-31
+v8/v8                                              #   25214 stars  C++          2026-08-31
+oxc-project/oxc                                    #   22587 stars  Rust         2026-08-31
+RustPython/RustPython                              #   22325 stars  Rust         2026-08-31
+gleam-lang/gleam                                   #   21850 stars  Rust         2026-08-31
+oracle/graal                                       #   21681 stars  Java         2026-08-31
+crystal-lang/crystal                               #   20391 stars  Crystal      2026-08-31
+compiler-explorer/compiler-explorer                #   19025 stars  TypeScript   2026-09-01
+nim-lang/Nim                                       #   18212 stars  Nim          2026-08-31
+AssemblyScript/assemblyscript                      #   17997 stars  WebAssembly  2026-07-22
 
-# --- css/html --------------------------------------------------
-ryanoasis/nerd-fonts                             # 64k stars, CSS
-jgthms/bulma                                     # 50k stars, CSS
-Nutlope/hallmark                                 # 27k stars, CSS
-adobe-fonts/source-code-pro                      # 20k stars, CSS
-uvdesk/community-skeleton                        # 19k stars, CSS
-picocss/pico                                     # 16k stars, CSS
-ConardLi/garden-skills                           # 11k stars, CSS
-devicons/devicon                                 # 11k stars, CSS
-tachyons-css/tachyons                            # 11k stars, CSS
-IBM/plex                                         # 11k stars, CSS
-jdan/98.css                                      # 11k stars, CSS
-zhishile/codex-auth-helper                       # 10k stars, CSS
-connors/photon                                   # 10k stars, CSS
-StylishThemes/GitHub-Dark                        # 9k stars, CSS
-thewhiteh4t/seeker                               # 9k stars, CSS
-spring-projects/spring-petclinic                 # 9k stars, CSS
-codeguy/php-the-right-way                        # 9k stars, CSS
-vinceliuice/WhiteSur-gtk-theme                   # 9k stars, CSS
-sindresorhus/github-markdown-css                 # 8k stars, CSS
-ai/easings.net                                   # 8k stars, CSS
-primefaces/primereact                            # 8k stars, CSS
+# --- css/html ------------------------------------------------------
+ryanoasis/nerd-fonts                               #   64473 stars  CSS          2026-08-22
+jgthms/bulma                                       #   50065 stars  CSS          2026-03-01
+Nutlope/hallmark                                   #   27628 stars  CSS          2026-08-06
+adobe-fonts/source-code-pro                        #   20442 stars  CSS          2025-10-28
+uvdesk/community-skeleton                          #   19594 stars  CSS          2025-10-01
+picocss/pico                                       #   16827 stars  CSS          2026-05-09
+ConardLi/garden-skills                             #   11915 stars  CSS          2026-07-12
+devicons/devicon                                   #   11798 stars  CSS          2026-06-09
+tachyons-css/tachyons                              #   11718 stars  CSS          2026-07-20
+IBM/plex                                           #   11613 stars  CSS          2026-07-30
+jdan/98.css                                        #   11467 stars  CSS          2025-09-07
+zhishile/codex-auth-helper                         #   10923 stars  CSS          2026-06-07
+connors/photon                                     #   10096 stars  CSS          2026-04-03
+StylishThemes/GitHub-Dark                          #    9968 stars  CSS          2026-08-29
+thewhiteh4t/seeker                                 #    9955 stars  CSS          2026-06-19
+spring-projects/spring-petclinic                   #    9494 stars  CSS          2026-08-26
+codeguy/php-the-right-way                          #    9250 stars  CSS          2026-04-27
+vinceliuice/WhiteSur-gtk-theme                     #    9228 stars  CSS          2026-08-28
+sindresorhus/github-markdown-css                   #    8924 stars  CSS          2026-02-16
+ai/easings.net                                     #    8673 stars  CSS          2026-04-07
+primefaces/primereact                              #    8318 stars  CSS          2026-08-27
 
-# --- data-science ----------------------------------------------
-pandas-dev/pandas                                # 49k stars, Python
-SimplifyJobs/Summer2027-Internships              # 46k stars, Python
-apache/airflow                                   # 46k stars, Python
-streamlit/streamlit                              # 45k stars, Python
-ray-project/ray                                  # 43k stars, Python
-gradio-app/gradio                                # 43k stars, Python
-explosion/spaCy                                  # 33k stars, Python
-Lightning-AI/pytorch-lightning                   # 31k stars, Python
-reflex-dev/reflex                                # 28k stars, Python
-plotly/dash                                      # 24k stars, Python
-sinaptik-ai/pandas-ai                            # 23k stars, Python
-PrefectHQ/prefect                                # 23k stars, Python
-matplotlib/matplotlib                            # 23k stars, Python
-marimo-team/marimo                               # 22k stars, Python
-akfamily/akshare                                 # 22k stars, Python
+# --- data-science --------------------------------------------------
+pandas-dev/pandas                                  #   49612 stars  Python       2026-08-31
+SimplifyJobs/Summer2027-Internships                #   46993 stars  Python       2026-09-01
+apache/airflow                                     #   46670 stars  Python       2026-08-31
+streamlit/streamlit                                #   45652 stars  Python       2026-08-31
+ray-project/ray                                    #   43668 stars  Python       2026-08-31
+gradio-app/gradio                                  #   43443 stars  Python       2026-09-01
+explosion/spaCy                                    #   33863 stars  Python       2026-08-24
+Lightning-AI/pytorch-lightning                     #   31313 stars  Python       2026-08-31
+reflex-dev/reflex                                  #   28865 stars  Python       2026-09-01
+plotly/dash                                        #   24389 stars  Python       2026-08-31
+sinaptik-ai/pandas-ai                              #   23785 stars  Python       2025-10-28
+PrefectHQ/prefect                                  #   23740 stars  Python       2026-08-31
+matplotlib/matplotlib                              #   23131 stars  Python       2026-08-31
+marimo-team/marimo                                 #   22574 stars  Python       2026-08-31
+akfamily/akshare                                   #   22338 stars  Python       2026-08-28
 
-# --- database --------------------------------------------------
-redis/redis                                      # 76k stars, C
-etcd-io/etcd                                     # 52k stars, Go
-dbeaver/dbeaver                                  # 51k stars, Java
-ClickHouse/ClickHouse                            # 49k stars, C++
-metabase/metabase                                # 49k stars, Clojure
-prisma/orm                                       # 47k stars, TypeScript
-duckdb/duckdb                                    # 40k stars, C++
-pingcap/tidb                                     # 40k stars, Go
-sqlmapproject/sqlmap                             # 38k stars, Python
-typeorm/typeorm                                  # 36k stars, TypeScript
-surrealdb/surrealdb                              # 32k stars, Rust
-cockroachdb/cockroach                            # 32k stars, Go
-influxdata/influxdb                              # 31k stars, Rust
-dragonflydb/dragonfly                            # 31k stars, C++
-chroma-core/chroma                               # 29k stars, Rust
-mongodb/mongo                                    # 28k stars, C++
-OtterMind/Chat2DB                                # 28k stars, Java
+# --- database ------------------------------------------------------
+redis/redis                                        #   76163 stars  C            2026-08-31
+etcd-io/etcd                                       #   52213 stars  Go           2026-08-31
+dbeaver/dbeaver                                    #   51604 stars  Java         2026-08-31
+ClickHouse/ClickHouse                              #   49572 stars  C++          2026-09-01
+metabase/metabase                                  #   49026 stars  Clojure      2026-09-01
+prisma/orm                                         #   47581 stars  TypeScript   2026-08-31
+duckdb/duckdb                                      #   40872 stars  C++          2026-08-31
+pingcap/tidb                                       #   40479 stars  Go           2026-09-01
+sqlmapproject/sqlmap                               #   38327 stars  Python       2026-08-28
+typeorm/typeorm                                    #   36640 stars  TypeScript   2026-08-27
+surrealdb/surrealdb                                #   32965 stars  Rust         2026-08-28
+cockroachdb/cockroach                              #   32436 stars  Go           2026-08-26
+influxdata/influxdb                                #   31732 stars  Rust         2026-08-31
+dragonflydb/dragonfly                              #   31087 stars  C++          2026-08-31
+chroma-core/chroma                                 #   29192 stars  Rust         2026-09-01
+mongodb/mongo                                      #   28520 stars  C++          2026-08-31
+OtterMind/Chat2DB                                  #   28057 stars  Java         2026-08-31
 
-# --- devops ----------------------------------------------------
-bregman-arie/devops-exercises                    # 84k stars, Python
-getsentry/sentry                                 # 44k stars, Python
-Kong/kong                                        # 44k stars, Lua
-dokku/dokku                                      # 32k stars, Shell
-MichaelCade/90DaysOfDevOps                       # 29k stars, Shell
-kestra-io/kestra                                 # 27k stars, Java
-jenkinsci/jenkins                                # 26k stars, Java
-yeasy/docker_practice                            # 26k stars, Go
-argoproj/argo-cd                                 # 24k stars, Go
-getsops/sops                                     # 22k stars, Go
-floci-io/floci                                   # 22k stars, Java
-pranshuparmar/witr                               # 21k stars, Go
-probelabs/goreplay                               # 19k stars, Go
-wtfutil/wtf                                      # 17k stars, Go
-apache/apisix                                    # 17k stars, Lua
-kubesphere/kubesphere                            # 17k stars, Go
-CISOfy/lynis                                     # 16k stars, Shell
+# --- devops --------------------------------------------------------
+bregman-arie/devops-exercises                      #   84325 stars  Python       2025-12-27
+getsentry/sentry                                   #   44699 stars  Python       2026-09-01
+Kong/kong                                          #   44065 stars  Lua          2026-08-16
+dokku/dokku                                        #   32124 stars  Shell        2026-08-31
+MichaelCade/90DaysOfDevOps                         #   29690 stars  Shell        2026-06-24
+kestra-io/kestra                                   #   27967 stars  Java         2026-08-31
+jenkinsci/jenkins                                  #   26523 stars  Java         2026-09-01
+yeasy/docker_practice                              #   26229 stars  Go           2026-08-26
+argoproj/argo-cd                                   #   24046 stars  Go           2026-08-31
+getsops/sops                                       #   22978 stars  Go           2026-08-31
+floci-io/floci                                     #   22895 stars  Java         2026-09-01
+pranshuparmar/witr                                 #   21964 stars  Go           2026-08-15
+probelabs/goreplay                                 #   19319 stars  Go           2026-01-27
+wtfutil/wtf                                        #   17071 stars  Go           2026-08-05
+apache/apisix                                      #   17066 stars  Lua          2026-08-31
+kubesphere/kubesphere                              #   17035 stars  Go           2026-07-15
+CISOfy/lynis                                       #   16263 stars  Shell        2026-08-05
 
-# --- docker ----------------------------------------------------
-Stirling-Tools/Stirling-PDF                      # 91k stars, Java
-macrozheng/mall                                  # 84k stars, Java
-dockur/windows                                   # 53k stars, Shell
-sickcodes/Docker-OSX                             # 52k stars, Shell
-mastodon/mastodon                                # 50k stars, Ruby
-gogs/gogs                                        # 47k stars, Go
-ToolJet/ToolJet                                  # 40k stars, JavaScript
-LizardByte/Sunshine                              # 40k stars, C++
-outline/outline                                  # 40k stars, TypeScript
-AstrBotDevs/AstrBot                              # 39k stars, Python
+# --- docker --------------------------------------------------------
+Stirling-Tools/Stirling-PDF                        #   91063 stars  Java         2026-09-01
+macrozheng/mall                                    #   84666 stars  Java         2026-05-14
+dockur/windows                                     #   53105 stars  Shell        2026-08-29
+sickcodes/Docker-OSX                               #   52902 stars  Shell        2025-11-11
+mastodon/mastodon                                  #   50258 stars  Ruby         2026-08-31
+gogs/gogs                                          #   47788 stars  Go           2026-08-26
+ToolJet/ToolJet                                    #   40806 stars  JavaScript   2026-08-31
+LizardByte/Sunshine                                #   40750 stars  C++          2026-08-31
+outline/outline                                    #   40393 stars  TypeScript   2026-08-31
+AstrBotDevs/AstrBot                                #   39864 stars  Python       2026-08-31
 
-# --- game-dev --------------------------------------------------
-godotengine/godot                                # 116k stars, C++
-bevyengine/bevy                                  # 47k stars, Rust
-phaserjs/phaser                                  # 40k stars, JavaScript
-raysan5/raylib                                   # 34k stars, C
-emilk/egui                                       # 30k stars, Rust
-4ian/GDevelop                                    # 26k stars, JavaScript
-libgdx/libgdx                                    # 25k stars, Java
-mxgmn/WaveFunctionCollapse                       # 25k stars, C#
-Donchitos/Claude-Code-Game-Studios               # 24k stars, Shell
-kitao/pyxel                                      # 17k stars, Rust
-aframevr/aframe                                  # 17k stars, JavaScript
-bkaradzic/bgfx                                   # 17k stars, C++
-game1024/OpenSpeedy                              # 17k stars, TypeScript
-wolfpld/tracy                                    # 16k stars, C++
-playcanvas/engine                                # 16k stars, JavaScript
-MonoGame/MonoGame                                # 14k stars, C#
-CoplayDev/unity-mcp                              # 13k stars, C#
-hajimehoshi/ebiten                               # 13k stars, Go
-heroiclabs/nakama                                # 13k stars, Go
-skypjack/entt                                    # 13k stars, C++
-Pumpkin-MC/Pumpkin                               # 11k stars, Rust
-flame-engine/flame                               # 10k stars, Dart
-Orama-Interactive/Pixelorama                     # 10k stars, GDScript
+# --- game-dev ------------------------------------------------------
+godotengine/godot                                  #  116450 stars  C++          2026-08-31
+bevyengine/bevy                                    #   47981 stars  Rust         2026-09-01
+phaserjs/phaser                                    #   40243 stars  JavaScript   2026-08-21
+raysan5/raylib                                     #   34544 stars  C            2026-08-29
+emilk/egui                                         #   30279 stars  Rust         2026-08-31
+4ian/GDevelop                                      #   26108 stars  JavaScript   2026-08-31
+libgdx/libgdx                                      #   25354 stars  Java         2026-08-25
+mxgmn/WaveFunctionCollapse                         #   25303 stars  C#           2026-03-22
+Donchitos/Claude-Code-Game-Studios                 #   24706 stars  Shell        2026-05-21
+kitao/pyxel                                        #   17786 stars  Rust         2026-08-30
+aframevr/aframe                                    #   17621 stars  JavaScript   2026-07-13
+bkaradzic/bgfx                                     #   17449 stars  C++          2026-09-01
+game1024/OpenSpeedy                                #   17289 stars  TypeScript   2026-08-09
+wolfpld/tracy                                      #   16693 stars  C++          2026-08-31
+playcanvas/engine                                  #   16593 stars  JavaScript   2026-08-31
+MonoGame/MonoGame                                  #   14372 stars  C#           2026-08-27
+CoplayDev/unity-mcp                                #   13790 stars  C#           2026-08-31
+hajimehoshi/ebiten                                 #   13442 stars  Go           2026-08-31
+heroiclabs/nakama                                  #   13251 stars  Go           2026-08-25
+skypjack/entt                                      #   13069 stars  C++          2026-08-31
+Pumpkin-MC/Pumpkin                                 #   11039 stars  Rust         2026-08-31
+flame-engine/flame                                 #   10737 stars  Dart         2026-08-31
+Orama-Interactive/Pixelorama                       #   10216 stars  GDScript     2026-08-28
 
-# --- go --------------------------------------------------------
-ollama/ollama                                    # 179k stars, Go
-golang/go                                        # 136k stars, Go
-kubernetes/kubernetes                            # 125k stars, Go
-microsoft/TypeScript                             # 110k stars, Go
-fatedier/frp                                     # 109k stars, Go
-JuliusBrussee/caveman                            # 102k stars, Go
-infiniflow/ragflow                               # 89k stars, Go
-gohugoio/hugo                                    # 89k stars, Go
-gin-gonic/gin                                    # 89k stars, Go
-syncthing/syncthing                              # 88k stars, Go
-junegunn/fzf                                     # 82k stars, Go
-jesseduffield/lazygit                            # 81k stars, Go
-netdata/netdata                                  # 80k stars, Go
-caddyserver/caddy                                # 75k stars, Go
-moby/moby                                        # 72k stars, Go
-nektos/act                                       # 71k stars, Go
-prometheus/prometheus                            # 65k stars, Go
-traefik/traefik                                  # 64k stars, Go
-usememos/memos                                   # 62k stars, Go
-pocketbase/pocketbase                            # 60k stars, Go
-rclone/rclone                                    # 59k stars, Go
-go-gitea/gitea                                   # 57k stars, Go
-wagoodman/dive                                   # 54k stars, Go
-jesseduffield/lazydocker                         # 52k stars, Go
+# --- go ------------------------------------------------------------
+ollama/ollama                                      #  179849 stars  Go           2026-09-01
+golang/go                                          #  136864 stars  Go           2026-08-31
+kubernetes/kubernetes                              #  125618 stars  Go           2026-08-31
+microsoft/TypeScript                               #  110822 stars  Go           2026-09-01
+fatedier/frp                                       #  109126 stars  Go           2026-08-29
+JuliusBrussee/caveman                              #  102047 stars  Go           2026-08-29
+infiniflow/ragflow                                 #   89761 stars  Go           2026-08-31
+gohugoio/hugo                                      #   89656 stars  Go           2026-08-31
+gin-gonic/gin                                      #   89149 stars  Go           2026-08-15
+syncthing/syncthing                                #   88169 stars  Go           2026-08-25
+junegunn/fzf                                       #   82759 stars  Go           2026-08-31
+jesseduffield/lazygit                              #   81824 stars  Go           2026-08-31
+netdata/netdata                                    #   80379 stars  Go           2026-08-31
+caddyserver/caddy                                  #   75372 stars  Go           2026-08-31
+moby/moby                                          #   72029 stars  Go           2026-08-31
+nektos/act                                         #   71727 stars  Go           2026-08-09
+prometheus/prometheus                              #   65926 stars  Go           2026-08-31
+traefik/traefik                                    #   64688 stars  Go           2026-08-31
+usememos/memos                                     #   62685 stars  Go           2026-08-31
+pocketbase/pocketbase                              #   60909 stars  Go           2026-08-28
+rclone/rclone                                      #   59479 stars  Go           2026-08-31
+go-gitea/gitea                                     #   57720 stars  Go           2026-08-31
+wagoodman/dive                                     #   54518 stars  Go           2025-12-15
+jesseduffield/lazydocker                           #   52688 stars  Go           2026-04-19
 
-# --- graphql ---------------------------------------------------
-marmelab/react-admin                             # 26k stars, TypeScript
-saleor/saleor                                    # 23k stars, Python
-vxcontrol/pentagi                                # 22k stars, Go
-parse-community/parse-server                     # 21k stars, JavaScript
-graphql/graphql-js                               # 20k stars, TypeScript
-apollographql/apollo-client                      # 19k stars, TypeScript
-mountain-loop/yaak                               # 19k stars, TypeScript
-redwoodjs/graphql                                # 17k stars, TypeScript
-graphql/graphiql                                 # 16k stars, TypeScript
-dagger/dagger                                    # 16k stars, Go
-amplication/amplication                          # 16k stars, TypeScript
+# --- graphql -------------------------------------------------------
+marmelab/react-admin                               #   26915 stars  TypeScript   2026-08-31
+saleor/saleor                                      #   23280 stars  Python       2026-08-31
+vxcontrol/pentagi                                  #   22203 stars  Go           2026-08-06
+parse-community/parse-server                       #   21412 stars  JavaScript   2026-09-01
+graphql/graphql-js                                 #   20348 stars  TypeScript   2026-08-31
+apollographql/apollo-client                        #   19814 stars  TypeScript   2026-08-31
+mountain-loop/yaak                                 #   19135 stars  TypeScript   2026-08-31
+redwoodjs/graphql                                  #   17605 stars  TypeScript   2026-08-09
+graphql/graphiql                                   #   16901 stars  TypeScript   2026-08-31
+dagger/dagger                                      #   16219 stars  Go           2026-09-01
+amplication/amplication                            #   16014 stars  TypeScript   2026-06-30
 
-# --- javascript ------------------------------------------------
-react/react                                      # 248k stars, JavaScript
-affaan-m/ECC                                     # 245k stars, JavaScript
-trekhleb/javascript-algorithms                   # 196k stars, JavaScript
-airbnb/javascript                                # 148k stars, JavaScript
-vercel/next.js                                   # 142k stars, JavaScript
-Chalarangelo/30-seconds-of-code                  # 128k stars, JavaScript
-nodejs/node                                      # 119k stars, JavaScript
-DietrichGebert/ponytail                          # 118k stars, JavaScript
-mrdoob/three.js                                  # 114k stars, JavaScript
-axios/axios                                      # 109k stars, JavaScript
-mui/material-ui                                  # 98k stars, JavaScript
-microsoft/Web-Dev-For-Beginners                  # 96k stars, JavaScript
-thedotmack/claude-mem                            # 92k stars, JavaScript
-addyosmani/agent-skills                          # 91k stars, JavaScript
-louislam/uptime-kuma                             # 90k stars, JavaScript
-sveltejs/svelte                                  # 88k stars, JavaScript
-Leonxlnx/taste-skill                             # 82k stars, JavaScript
-anuraghazra/github-readme-stats                  # 79k stars, JavaScript
-typicode/json-server                             # 75k stars, JavaScript
-juliangarnier/anime                              # 72k stars, JavaScript
-hakimel/reveal.js                                # 72k stars, JavaScript
-santifer/career-ops                              # 69k stars, JavaScript
-expressjs/express                                # 69k stars, JavaScript
+# --- javascript ----------------------------------------------------
+react/react                                        #  248355 stars  JavaScript   2026-08-31
+affaan-m/ECC                                       #  245241 stars  JavaScript   2026-08-31
+trekhleb/javascript-algorithms                     #  196585 stars  JavaScript   2026-07-26
+airbnb/javascript                                  #  148140 stars  JavaScript   2026-04-16
+vercel/next.js                                     #  142039 stars  JavaScript   2026-09-01
+Chalarangelo/30-seconds-of-code                    #  128879 stars  JavaScript   2026-08-19
+nodejs/node                                        #  119978 stars  JavaScript   2026-08-31
+DietrichGebert/ponytail                            #  118273 stars  JavaScript   2026-08-07
+mrdoob/three.js                                    #  114985 stars  JavaScript   2026-08-31
+axios/axios                                        #  109195 stars  JavaScript   2026-08-28
+mui/material-ui                                    #   98976 stars  JavaScript   2026-08-31
+microsoft/Web-Dev-For-Beginners                    #   96516 stars  JavaScript   2026-08-05
+thedotmack/claude-mem                              #   92777 stars  JavaScript   2026-08-31
+addyosmani/agent-skills                            #   91194 stars  JavaScript   2026-08-28
+louislam/uptime-kuma                               #   90809 stars  JavaScript   2026-09-01
+sveltejs/svelte                                    #   88035 stars  JavaScript   2026-08-31
+Leonxlnx/taste-skill                               #   82896 stars  JavaScript   2026-08-24
+anuraghazra/github-readme-stats                    #   79843 stars  JavaScript   2026-08-31
+typicode/json-server                               #   75692 stars  JavaScript   2026-03-23
+juliangarnier/anime                                #   72558 stars  JavaScript   2026-08-21
+hakimel/reveal.js                                  #   72236 stars  JavaScript   2026-08-24
+santifer/career-ops                                #   69623 stars  JavaScript   2026-08-31
+expressjs/express                                  #   69418 stars  JavaScript   2026-08-22
 
-# --- kubernetes ------------------------------------------------
-portainer/portainer                              # 38k stars, TypeScript
-istio/istio                                      # 38k stars, Go
-derailed/k9s                                     # 34k stars, Go
-seaweedfs/seaweedfs                              # 34k stars, Go
-k3s-io/k3s                                       # 33k stars, Go
-alibaba/nacos                                    # 33k stars, Java
-podman-container-tools/podman                    # 32k stars, Go
-kubernetes/minikube                              # 32k stars, Go
-abiosoft/colima                                  # 30k stars, Go
-helm/helm                                        # 30k stars, Go
-hashicorp/consul                                 # 30k stars, Go
-goharbor/harbor                                  # 29k stars, Go
+# --- kubernetes ----------------------------------------------------
+portainer/portainer                                #   38398 stars  TypeScript   2026-08-28
+istio/istio                                        #   38369 stars  Go           2026-08-31
+derailed/k9s                                       #   34479 stars  Go           2026-08-31
+seaweedfs/seaweedfs                                #   34382 stars  Go           2026-08-31
+k3s-io/k3s                                         #   33857 stars  Go           2026-08-28
+alibaba/nacos                                      #   33326 stars  Java         2026-08-31
+podman-container-tools/podman                      #   32742 stars  Go           2026-08-31
+kubernetes/minikube                                #   32079 stars  Go           2026-08-31
+abiosoft/colima                                    #   30575 stars  Go           2026-08-31
+helm/helm                                          #   30206 stars  Go           2026-08-31
+hashicorp/consul                                   #   30053 stars  Go           2026-08-31
+goharbor/harbor                                    #   29274 stars  Go           2026-08-31
 
-# --- llm -------------------------------------------------------
-TauricResearch/TradingAgents                     # 102k stars, Python
-vllm-project/vllm                                # 90k stars, Python
-OpenHands/OpenHands                              # 85k stars, TypeScript
-datawhalechina/hello-agents                      # 75k stars, Python
-unslothai/unsloth                                # 75k stars, Python
+# --- llm -----------------------------------------------------------
+TauricResearch/TradingAgents                       #  102019 stars  Python       2026-08-31
+vllm-project/vllm                                  #   90624 stars  Python       2026-09-01
+OpenHands/OpenHands                                #   85779 stars  TypeScript   2026-08-31
+datawhalechina/hello-agents                        #   75800 stars  Python       2026-08-18
+unslothai/unsloth                                  #   75363 stars  Python       2026-09-01
 
-# --- machine-learning ------------------------------------------
-tensorflow/tensorflow                            # 198k stars, C++
-pytorch/pytorch                                  # 102k stars, Python
-tesseract-ocr/tesseract                          # 76k stars, C++
-OpenBB-finance/OpenBB                            # 72k stars, Python
-keras-team/keras                                 # 64k stars, Python
-ultralytics/ultralytics                          # 61k stars, Python
-deepfakes/faceswap                               # 57k stars, Python
-ageitgey/face_recognition                        # 56k stars, Python
-roboflow/supervision                             # 49k stars, Python
-JuliaLang/julia                                  # 49k stars, Julia
-microsoft/qlib                                   # 48k stars, Python
+# --- machine-learning ----------------------------------------------
+tensorflow/tensorflow                              #  198094 stars  C++          2026-09-01
+pytorch/pytorch                                    #  102696 stars  Python       2026-09-01
+tesseract-ocr/tesseract                            #   76281 stars  C++          2026-08-25
+OpenBB-finance/OpenBB                              #   72540 stars  Python       2026-07-30
+keras-team/keras                                   #   64269 stars  Python       2026-08-31
+ultralytics/ultralytics                            #   61131 stars  Python       2026-08-31
+deepfakes/faceswap                                 #   57518 stars  Python       2026-08-05
+ageitgey/face_recognition                          #   56702 stars  Python       2026-06-25
+roboflow/supervision                               #   49815 stars  Python       2026-08-25
+JuliaLang/julia                                    #   49055 stars  Julia        2026-09-01
+microsoft/qlib                                     #   48153 stars  Python       2026-07-23
 
-# --- mcp -------------------------------------------------------
-koala73/worldmonitor                             # 85k stars, TypeScript
-lobehub/lobehub                                  # 82k stars, TypeScript
-D4Vinci/Scrapling                                # 77k stars, Python
-Panniantong/Agent-Reach                          # 77k stars, Python
-sansan0/TrendRadar                               # 61k stars, Python
-upstash/context7                                 # 61k stars, TypeScript
-MemPalace/mempalace                              # 58k stars, Python
-aaif-goose/goose                                 # 53k stars, Rust
-rohitg00/ai-engineering-from-scratch             # 51k stars, Python
-ChromeDevTools/chrome-devtools-mcp               # 50k stars, TypeScript
-mudler/LocalAI                                   # 48k stars, Go
-HKUDS/nanobot                                    # 47k stars, Python
+# --- mcp -----------------------------------------------------------
+koala73/worldmonitor                               #   85204 stars  TypeScript   2026-08-31
+lobehub/lobehub                                    #   82127 stars  TypeScript   2026-08-31
+D4Vinci/Scrapling                                  #   77583 stars  Python       2026-08-25
+Panniantong/Agent-Reach                            #   77113 stars  Python       2026-08-25
+sansan0/TrendRadar                                 #   61964 stars  Python       2026-07-17
+upstash/context7                                   #   61454 stars  TypeScript   2026-08-31
+MemPalace/mempalace                                #   58757 stars  Python       2026-08-31
+aaif-goose/goose                                   #   53755 stars  Rust         2026-09-01
+rohitg00/ai-engineering-from-scratch               #   51588 stars  Python       2026-08-30
+ChromeDevTools/chrome-devtools-mcp                 #   50291 stars  TypeScript   2026-08-31
+mudler/LocalAI                                     #   48799 stars  Go           2026-08-31
+HKUDS/nanobot                                      #   47578 stars  Python       2026-08-31
 
-# --- mobile ----------------------------------------------------
-laurent22/joplin                                 # 56k stars, TypeScript
-react-hook-form/react-hook-form                  # 44k stars, TypeScript
-mattermost/mattermost                            # 38k stars, TypeScript
-jaredpalmer/formik                               # 34k stars, TypeScript
-karakeep-app/karakeep                            # 28k stars, TypeScript
-maotoumao/MusicFree                              # 26k stars, TypeScript
-zulip/zulip                                      # 25k stars, Python
-react-navigation/react-navigation                # 24k stars, TypeScript
-pubkey/rxdb                                      # 23k stars, TypeScript
-necolas/react-native-web                         # 22k stars, JavaScript
-hasaneyldrm/exercises-dataset                    # 21k stars, HTML
-GeekyAnts/NativeBase                             # 20k stars, TypeScript
-infinitered/ignite                               # 19k stars, TypeScript
+# --- mobile --------------------------------------------------------
+laurent22/joplin                                   #   56181 stars  TypeScript   2026-08-31
+react-hook-form/react-hook-form                    #   44843 stars  TypeScript   2026-08-31
+mattermost/mattermost                              #   38948 stars  TypeScript   2026-09-01
+jaredpalmer/formik                                 #   34328 stars  TypeScript   2025-11-10
+karakeep-app/karakeep                              #   28703 stars  TypeScript   2026-08-31
+maotoumao/MusicFree                                #   26493 stars  TypeScript   2026-06-20
+zulip/zulip                                        #   25799 stars  Python       2026-08-31
+react-navigation/react-navigation                  #   24502 stars  TypeScript   2026-08-26
+pubkey/rxdb                                        #   23371 stars  TypeScript   2026-08-31
+necolas/react-native-web                           #   22141 stars  JavaScript   2025-10-16
+hasaneyldrm/exercises-dataset                      #   21176 stars  HTML         2026-07-16
+GeekyAnts/NativeBase                               #   20382 stars  TypeScript   2026-01-31
+infinitered/ignite                                 #   19938 stars  TypeScript   2026-06-07
 
-# --- nextjs ----------------------------------------------------
-f/prompts.chat                                   # 168k stars, HTML
-coollabsio/coolify                               # 61k stars, PHP
-calcom/cal.diy                                   # 48k stars, TypeScript
-payloadcms/payload                               # 44k stars, TypeScript
-AykutSarac/jsoncrack.com                         # 44k stars, TypeScript
-trpc/trpc                                        # 40k stars, TypeScript
-CopilotKit/CopilotKit                            # 37k stars, TypeScript
-Dokploy/dokploy                                  # 37k stars, TypeScript
-refinedev/refine                                 # 35k stars, TypeScript
-gitroomhq/postiz-app                             # 35k stars, TypeScript
-JCodesMore/ai-website-cloner-template            # 33k stars, JavaScript
-vercel/swr                                       # 32k stars, TypeScript
-gethomepage/homepage                             # 32k stars, JavaScript
-SigNoz/signoz                                    # 31k stars, TypeScript
-onyx-dot-app/onyx                                # 31k stars, Python
-labring/FastGPT                                  # 29k stars, TypeScript
-simstudioai/sim                                  # 29k stars, TypeScript
-slymnoyann/hey-1                                 # 29k stars, TypeScript
-nrwl/nx                                          # 29k stars, TypeScript
+# --- nextjs --------------------------------------------------------
+f/prompts.chat                                     #  168348 stars  HTML         2026-08-31
+coollabsio/coolify                                 #   61256 stars  PHP          2026-08-31
+calcom/cal.diy                                     #   48053 stars  TypeScript   2026-08-08
+payloadcms/payload                                 #   44521 stars  TypeScript   2026-08-31
+AykutSarac/jsoncrack.com                           #   44351 stars  TypeScript   2026-08-30
+trpc/trpc                                          #   40564 stars  TypeScript   2026-08-31
+CopilotKit/CopilotKit                              #   37132 stars  TypeScript   2026-09-01
+Dokploy/dokploy                                    #   37003 stars  TypeScript   2026-08-31
+refinedev/refine                                   #   35605 stars  TypeScript   2026-06-05
+gitroomhq/postiz-app                               #   35322 stars  TypeScript   2026-08-31
+JCodesMore/ai-website-cloner-template              #   33505 stars  JavaScript   2026-08-14
+vercel/swr                                         #   32476 stars  TypeScript   2026-08-23
+gethomepage/homepage                               #   32341 stars  JavaScript   2026-08-31
+SigNoz/signoz                                      #   31983 stars  TypeScript   2026-08-31
+onyx-dot-app/onyx                                  #   31869 stars  Python       2026-08-31
+labring/FastGPT                                    #   29520 stars  TypeScript   2026-08-31
+simstudioai/sim                                    #   29498 stars  TypeScript   2026-09-01
+slymnoyann/hey-1                                   #   29379 stars  TypeScript   2026-05-13
+nrwl/nx                                            #   29287 stars  TypeScript   2026-08-31
 
-# --- python ----------------------------------------------------
-NousResearch/hermes-agent                        # 239k stars, Python
-TheAlgorithms/Python                             # 224k stars, Python
-yt-dlp/yt-dlp                                    # 188k stars, Python
-Significant-Gravitas/AutoGPT                     # 187k stars, Python
-microsoft/markitdown                             # 177k stars, Python
-521xueweihan/HelloGitHub                         # 173k stars, Python
-anthropics/skills                                # 172k stars, Python
-AUTOMATIC1111/stable-diffusion-webui             # 164k stars, Python
-huggingface/transformers                         # 164k stars, Python
-langflow-ai/langflow                             # 153k stars, Python
-open-webui/open-webui                            # 150k stars, Python
-langchain-ai/langchain                           # 145k stars, Python
-anthropics/claude-code                           # 143k stars, Python
-ytdl-org/youtube-dl                              # 141k stars, Python
-github/spec-kit                                  # 132k stars, Python
-Comfy-Org/ComfyUI                                # 130k stars, Python
-nextlevelbuilder/ui-ux-pro-max-skill             # 123k stars, Python
-harry0703/MoneyPrinterTurbo                      # 119k stars, Python
-Graphify-Labs/graphify                           # 113k stars, Python
+# --- python --------------------------------------------------------
+NousResearch/hermes-agent                          #  239009 stars  Python       2026-09-01
+TheAlgorithms/Python                               #  224153 stars  Python       2026-08-31
+yt-dlp/yt-dlp                                      #  188165 stars  Python       2026-08-30
+Significant-Gravitas/AutoGPT                       #  187039 stars  Python       2026-08-31
+microsoft/markitdown                               #  177395 stars  Python       2026-08-31
+521xueweihan/HelloGitHub                           #  173973 stars  Python       2026-08-28
+anthropics/skills                                  #  172809 stars  Python       2026-08-21
+AUTOMATIC1111/stable-diffusion-webui               #  164748 stars  Python       2026-03-02
+huggingface/transformers                           #  164672 stars  Python       2026-08-31
+langflow-ai/langflow                               #  153995 stars  Python       2026-09-01
+open-webui/open-webui                              #  150523 stars  Python       2026-08-31
+langchain-ai/langchain                             #  145371 stars  Python       2026-08-31
+anthropics/claude-code                             #  143587 stars  Python       2026-08-31
+ytdl-org/youtube-dl                                #  141068 stars  Python       2026-02-19
+github/spec-kit                                    #  132593 stars  Python       2026-08-31
+Comfy-Org/ComfyUI                                  #  130917 stars  Python       2026-08-31
+nextlevelbuilder/ui-ux-pro-max-skill               #  123539 stars  Python       2026-08-31
+harry0703/MoneyPrinterTurbo                        #  119084 stars  Python       2026-08-31
+Graphify-Labs/graphify                             #  113010 stars  Python       2026-08-30
 
-# --- rag -------------------------------------------------------
-PaddlePaddle/PaddleOCR                           # 88k stars, Python
-headroomlabs-ai/headroom                         # 68k stars, Python
-run-llama/llama_index                            # 51k stars, Python
-jeecgboot/JeecgBoot                              # 47k stars, Java
-milvus-io/milvus                                 # 45k stars, Go
-langchain-ai/langgraph                           # 40k stars, Python
-The-Vibe-Company/Quivr                           # 39k stars, Python
-HKUDS/LightRAG                                   # 39k stars, Python
-chatchat-space/Langchain-Chatchat                # 38k stars, Python
-HKUDS/DeepTutor                                  # 38k stars, Python
-khoj-ai/khoj                                     # 36k stars, Python
-ItzCrazyKns/Vane                                 # 36k stars, TypeScript
+# --- rag -----------------------------------------------------------
+PaddlePaddle/PaddleOCR                             #   88551 stars  Python       2026-07-22
+headroomlabs-ai/headroom                           #   68208 stars  Python       2026-08-31
+run-llama/llama_index                              #   51945 stars  Python       2026-08-31
+jeecgboot/JeecgBoot                                #   47574 stars  Java         2026-08-31
+milvus-io/milvus                                   #   45909 stars  Go           2026-08-31
+langchain-ai/langgraph                             #   40801 stars  Python       2026-08-30
+The-Vibe-Company/Quivr                             #   39437 stars  Python       2026-08-31
+HKUDS/LightRAG                                     #   39294 stars  Python       2026-08-31
+chatchat-space/Langchain-Chatchat                  #   38597 stars  Python       2025-11-10
+HKUDS/DeepTutor                                    #   38087 stars  Python       2026-08-31
+khoj-ai/khoj                                       #   36839 stars  Python       2026-08-02
+ItzCrazyKns/Vane                                   #   36563 stars  TypeScript   2026-04-11
 
-# --- react -----------------------------------------------------
-react/react-native                               # 126k stars, C++
-ChatGPTNextWeb/NextChat                          # 88k stars, TypeScript
-apache/superset                                  # 74k stars, Python
-leonardomso/33-js-concepts                       # 66k stars, JavaScript
-makeplane/plane                                  # 58k stars, TypeScript
-pmndrs/zustand                                   # 58k stars, TypeScript
-remotion-dev/remotion                            # 57k stars, TypeScript
-appwrite/appwrite                                # 57k stars, TypeScript
-twentyhq/twenty                                  # 55k stars, TypeScript
-gatsbyjs/gatsby                                  # 55k stars, JavaScript
-ionic-team/ionic-framework                       # 52k stars, TypeScript
+# --- react ---------------------------------------------------------
+react/react-native                                 #  126468 stars  C++          2026-08-31
+ChatGPTNextWeb/NextChat                            #   88676 stars  TypeScript   2026-08-11
+apache/superset                                    #   74564 stars  Python       2026-08-31
+leonardomso/33-js-concepts                         #   66520 stars  JavaScript   2026-08-02
+makeplane/plane                                    #   58651 stars  TypeScript   2026-08-31
+pmndrs/zustand                                     #   58627 stars  TypeScript   2026-08-31
+remotion-dev/remotion                              #   57888 stars  TypeScript   2026-08-31
+appwrite/appwrite                                  #   57199 stars  TypeScript   2026-09-01
+twentyhq/twenty                                    #   55963 stars  TypeScript   2026-09-01
+gatsbyjs/gatsby                                    #   55944 stars  JavaScript   2026-08-29
+ionic-team/ionic-framework                         #   52638 stars  TypeScript   2026-08-31
 
-# --- rust ------------------------------------------------------
-ultraworkers/claw-code                           # 195k stars, Rust
-farion1231/cc-switch                             # 130k stars, Rust
-rustdesk/rustdesk                                # 122k stars, Rust
-openai/codex                                     # 120k stars, Rust
-rust-lang/rust                                   # 116k stars, Rust
-tauri-apps/tauri                                 # 110k stars, Rust
-denoland/deno                                    # 108k stars, Rust
-oven-sh/bun                                      # 95k stars, Rust
-ruvnet/RuView                                    # 92k stars, Rust
-zed-industries/zed                               # 89k stars, Rust
-astral-sh/uv                                     # 89k stars, Rust
-rtk-ai/rtk                                       # 78k stars, Rust
-unionlabs/union                                  # 73k stars, Rust
-openinterpreter/openinterpreter                  # 68k stars, Rust
-BurntSushi/ripgrep                               # 67k stars, Rust
-dani-garcia/vaultwarden                          # 66k stars, Rust
-alacritty/alacritty                              # 65k stars, Rust
-warpdotdev/warp                                  # 64k stars, Rust
-rust-lang/rustlings                              # 64k stars, Rust
-FuelLabs/sway                                    # 61k stars, Rust
-tw93/Pake                                        # 61k stars, Rust
-sharkdp/bat                                      # 60k stars, Rust
-meilisearch/meilisearch                          # 59k stars, Rust
+# --- rust ----------------------------------------------------------
+ultraworkers/claw-code                             #  195158 stars  Rust         2026-08-16
+farion1231/cc-switch                               #  130394 stars  Rust         2026-08-31
+rustdesk/rustdesk                                  #  122263 stars  Rust         2026-08-31
+openai/codex                                       #  120447 stars  Rust         2026-09-01
+rust-lang/rust                                     #  116699 stars  Rust         2026-08-31
+tauri-apps/tauri                                   #  110711 stars  Rust         2026-08-31
+denoland/deno                                      #  108358 stars  Rust         2026-08-31
+oven-sh/bun                                        #   95828 stars  Rust         2026-09-01
+ruvnet/RuView                                      #   92204 stars  Rust         2026-08-31
+zed-industries/zed                                 #   89538 stars  Rust         2026-08-31
+astral-sh/uv                                       #   89285 stars  Rust         2026-08-31
+rtk-ai/rtk                                         #   78091 stars  Rust         2026-08-31
+unionlabs/union                                    #   73823 stars  Rust         2026-07-25
+openinterpreter/openinterpreter                    #   68219 stars  Rust         2026-08-20
+BurntSushi/ripgrep                                 #   67777 stars  Rust         2026-08-04
+dani-garcia/vaultwarden                            #   66569 stars  Rust         2026-08-29
+alacritty/alacritty                                #   65578 stars  Rust         2026-08-31
+warpdotdev/warp                                    #   64688 stars  Rust         2026-09-01
+rust-lang/rustlings                                #   64019 stars  Rust         2026-08-30
+FuelLabs/sway                                      #   61467 stars  Rust         2026-09-01
+tw93/Pake                                          #   61185 stars  Rust         2026-08-30
+sharkdp/bat                                        #   60322 stars  Rust         2026-08-31
+meilisearch/meilisearch                            #   59152 stars  Rust         2026-08-31
 
-# --- security --------------------------------------------------
-swisskyrepo/PayloadsAllTheThings                 # 80k stars, Python
-usestrix/strix                                   # 59k stars, Python
-x64dbg/x64dbg                                    # 49k stars, C++
-KeygraphHQ/shannon                               # 47k stars, TypeScript
-mitmproxy/mitmproxy                              # 44k stars, Python
-GyulyVGC/sniffnet                                # 40k stars, Rust
-aquasecurity/trivy                               # 37k stars, Go
-lissy93/web-check                                # 34k stars, TypeScript
-mukul975/Anthropic-Cybersecurity-Skills          # 31k stars, Python
-nginx/nginx                                      # 31k stars, C
-StevenBlack/hosts                                # 30k stars, Python
-projectdiscovery/nuclei                          # 30k stars, Go
-trailofbits/algo                                 # 30k stars, Python
-community-scripts/ProxmoxVE                      # 29k stars, Shell
-Infisical/infisical                              # 29k stars, TypeScript
-gitleaks/gitleaks                                # 29k stars, Go
-authelia/authelia                                # 28k stars, Go
-keepassxreboot/keepassxc                         # 28k stars, C++
-hwdsl2/setup-ipsec-vpn                           # 28k stars, Shell
+# --- security ------------------------------------------------------
+swisskyrepo/PayloadsAllTheThings                   #   80539 stars  Python       2026-08-27
+usestrix/strix                                     #   59739 stars  Python       2026-09-01
+x64dbg/x64dbg                                      #   49367 stars  C++          2026-08-30
+KeygraphHQ/shannon                                 #   47396 stars  TypeScript   2026-08-31
+mitmproxy/mitmproxy                                #   44871 stars  Python       2026-08-25
+GyulyVGC/sniffnet                                  #   40957 stars  Rust         2026-08-31
+aquasecurity/trivy                                 #   37722 stars  Go           2026-08-28
+lissy93/web-check                                  #   34631 stars  TypeScript   2026-08-27
+mukul975/Anthropic-Cybersecurity-Skills            #   31840 stars  Python       2026-08-31
+nginx/nginx                                        #   31543 stars  C            2026-08-31
+StevenBlack/hosts                                  #   30976 stars  Python       2026-08-31
+projectdiscovery/nuclei                            #   30957 stars  Go           2026-08-31
+trailofbits/algo                                   #   30365 stars  Python       2026-08-26
+community-scripts/ProxmoxVE                        #   29462 stars  Shell        2026-08-31
+Infisical/infisical                                #   29053 stars  TypeScript   2026-09-01
+gitleaks/gitleaks                                  #   29043 stars  Go           2026-08-26
+authelia/authelia                                  #   28761 stars  Go           2026-08-31
+keepassxreboot/keepassxc                           #   28633 stars  C++          2026-08-24
+hwdsl2/setup-ipsec-vpn                             #   28409 stars  Shell        2026-08-29
 
-# --- svelte ----------------------------------------------------
-imputnet/cobalt                                  # 42k stars, Svelte
-saadeghi/daisyui                                 # 42k stars, JavaScript
-xyflow/xyflow                                    # 38k stars, TypeScript
-wailsapp/wails                                   # 36k stars, Go
-vercel/ai                                        # 26k stars, TypeScript
-NativeScript/NativeScript                        # 25k stars, TypeScript
-tabler/tabler-icons                              # 21k stars, JavaScript
-sveltejs/kit                                     # 20k stars, JavaScript
-VERT-sh/VERT                                     # 15k stars, Svelte
-Automattic/harper                                # 14k stars, Rust
-yoavbls/pretty-ts-errors                         # 14k stars, TypeScript
-BuilderIO/mitosis                                # 13k stars, TypeScript
-codesandbox/codesandbox-client                   # 13k stars, JavaScript
-openreplay/openreplay                            # 12k stars, TypeScript
-huggingface/chat-ui                              # 10k stars, TypeScript
-Abdenasser/neohtop                               # 9k stars, Svelte
-huntabyte/shadcn-svelte                          # 9k stars, TypeScript
-tsparticles/tsparticles                          # 8k stars, TypeScript
-davidjerleke/embla-carousel                      # 8k stars, TypeScript
+# --- svelte --------------------------------------------------------
+imputnet/cobalt                                    #   42521 stars  Svelte       2026-04-06
+saadeghi/daisyui                                   #   42257 stars  JavaScript   2026-08-31
+xyflow/xyflow                                      #   38213 stars  TypeScript   2026-08-31
+wailsapp/wails                                     #   36074 stars  Go           2026-09-01
+vercel/ai                                          #   26512 stars  TypeScript   2026-09-01
+NativeScript/NativeScript                          #   25634 stars  TypeScript   2026-08-31
+tabler/tabler-icons                                #   21547 stars  JavaScript   2026-08-31
+sveltejs/kit                                       #   20773 stars  JavaScript   2026-09-01
+VERT-sh/VERT                                       #   15471 stars  Svelte       2026-08-31
+Automattic/harper                                  #   14850 stars  Rust         2026-08-31
+yoavbls/pretty-ts-errors                           #   14105 stars  TypeScript   2026-08-24
+BuilderIO/mitosis                                  #   13975 stars  TypeScript   2026-07-21
+codesandbox/codesandbox-client                     #   13639 stars  JavaScript   2026-08-25
+openreplay/openreplay                              #   12620 stars  TypeScript   2026-08-31
+huggingface/chat-ui                                #   10922 stars  TypeScript   2026-08-31
+Abdenasser/neohtop                                 #    9330 stars  Svelte       2026-03-30
+huntabyte/shadcn-svelte                            #    9073 stars  TypeScript   2026-08-27
+tsparticles/tsparticles                            #    8973 stars  TypeScript   2026-08-31
+davidjerleke/embla-carousel                        #    8400 stars  TypeScript   2026-08-21
 
-# --- tailwind --------------------------------------------------
-DavidHDev/react-bits                             # 46k stars, JavaScript
-fastapi/full-stack-fastapi-template              # 45k stars, TypeScript
-drawdb-io/drawdb                                 # 39k stars, JavaScript
-supermemoryai/supermemory                        # 29k stars, TypeScript
-t3-oss/create-t3-app                             # 29k stars, TypeScript
-plausible/analytics                              # 28k stars, Elixir
-onlook-dev/onlook                                # 26k stars, TypeScript
-dubinc/dub                                       # 24k stars, TypeScript
-kriasoft/react-starter-kit                       # 23k stars, TypeScript
-wandb/openui                                     # 22k stars, TypeScript
-pure-admin/vue-pure-admin                        # 20k stars, Vue
-shadcn-ui/taxonomy                               # 19k stars, TypeScript
-C4illin/ConvertX                                 # 18k stars, TypeScript
-docusealco/docuseal                              # 18k stars, Ruby
-Open-Dev-Society/OpenStock                       # 14k stars, TypeScript
+# --- tailwind ------------------------------------------------------
+DavidHDev/react-bits                               #   46537 stars  JavaScript   2026-08-31
+fastapi/full-stack-fastapi-template                #   45253 stars  TypeScript   2026-08-28
+drawdb-io/drawdb                                   #   39321 stars  JavaScript   2026-08-29
+supermemoryai/supermemory                          #   29169 stars  TypeScript   2026-08-31
+t3-oss/create-t3-app                               #   29103 stars  TypeScript   2025-12-13
+plausible/analytics                                #   28819 stars  Elixir       2026-08-31
+onlook-dev/onlook                                  #   26613 stars  TypeScript   2026-08-25
+dubinc/dub                                         #   24637 stars  TypeScript   2026-08-31
+kriasoft/react-starter-kit                         #   23674 stars  TypeScript   2026-08-31
+wandb/openui                                       #   22524 stars  TypeScript   2026-08-27
+pure-admin/vue-pure-admin                          #   20577 stars  Vue          2026-08-23
+shadcn-ui/taxonomy                                 #   19287 stars  TypeScript   2026-04-20
+C4illin/ConvertX                                   #   18643 stars  TypeScript   2026-08-19
+docusealco/docuseal                                #   18410 stars  Ruby         2026-08-31
+Open-Dev-Society/OpenStock                         #   14168 stars  TypeScript   2026-08-21
 
-# --- testing ---------------------------------------------------
-goldbergyoni/nodebestpractices                   # 105k stars, Dockerfile
-usebruno/bruno                                   # 46k stars, JavaScript
-jestjs/jest                                      # 45k stars, TypeScript
-stretchr/testify                                 # 26k stars, Go
-promptfoo/promptfoo                              # 24k stars, TypeScript
-mochajs/mocha                                    # 22k stars, JavaScript
-catchorg/Catch2                                  # 21k stars, C++
-avajs/ava                                        # 20k stars, JavaScript
-enzymejs/enzyme                                  # 19k stars, JavaScript
-testing-library/react-testing-library            # 19k stars, JavaScript
-joke2k/faker                                     # 19k stars, Python
-Orange-OpenSource/hurl                           # 19k stars, Rust
-keploy/keploy                                    # 18k stars, Go
-jasmine/jasmine                                  # 15k stars, JavaScript
-mockito/mockito                                  # 15k stars, Java
-web-infra-dev/midscene                           # 14k stars, TypeScript
-pytest-dev/pytest                                # 14k stars, Python
-phpstan/phpstan                                  # 14k stars, PHP
-metersphere/metersphere                          # 13k stars, Java
+# --- testing -------------------------------------------------------
+goldbergyoni/nodebestpractices                     #  105598 stars  Dockerfile   2026-06-15
+usebruno/bruno                                     #   46673 stars  JavaScript   2026-08-31
+jestjs/jest                                        #   45476 stars  TypeScript   2026-08-31
+stretchr/testify                                   #   26195 stars  Go           2026-08-24
+promptfoo/promptfoo                                #   24706 stars  TypeScript   2026-08-31
+mochajs/mocha                                      #   22908 stars  JavaScript   2026-08-31
+catchorg/Catch2                                    #   21456 stars  C++          2026-08-25
+avajs/ava                                          #   20828 stars  JavaScript   2026-06-17
+enzymejs/enzyme                                    #   19820 stars  JavaScript   2025-10-22
+testing-library/react-testing-library              #   19645 stars  JavaScript   2026-08-27
+joke2k/faker                                       #   19384 stars  Python       2026-09-01
+Orange-OpenSource/hurl                             #   19172 stars  Rust         2026-08-31
+keploy/keploy                                      #   18439 stars  Go           2026-08-31
+jasmine/jasmine                                    #   15823 stars  JavaScript   2026-08-20
+mockito/mockito                                    #   15449 stars  Java         2026-08-27
+web-infra-dev/midscene                             #   14748 stars  TypeScript   2026-08-31
+pytest-dev/pytest                                  #   14464 stars  Python       2026-08-31
+phpstan/phpstan                                    #   14093 stars  PHP          2026-08-31
+metersphere/metersphere                            #   13485 stars  Java         2026-08-10
 
-# --- typescript ------------------------------------------------
-freeCodeCamp/freeCodeCamp                        # 454k stars, TypeScript
-openclaw/openclaw                                # 388k stars, TypeScript
-deepseek-ai/deepseek-harness                     # 206k stars, TypeScript
-n8n-io/n8n                                       # 202k stars, TypeScript
-anomalyco/opencode                               # 202k stars, TypeScript
-microsoft/vscode                                 # 190k stars, TypeScript
-firecrawl/firecrawl                              # 174k stars, TypeScript
-langgenius/dify                                  # 154k stars, TypeScript
-clash-verge-rev/clash-verge-rev                  # 141k stars, TypeScript
-iptv-org/iptv                                    # 137k stars, TypeScript
-excalidraw/excalidraw                            # 130k stars, TypeScript
-garrytan/gstack                                  # 130k stars, TypeScript
-shadcn-ui/ui                                     # 122k stars, TypeScript
-immich-app/immich                                # 113k stars, TypeScript
-supabase/supabase                                # 108k stars, TypeScript
-google-gemini/gemini-cli                         # 106k stars, TypeScript
-angular/angular                                  # 101k stars, TypeScript
-earendil-works/pi                                # 99k stars, TypeScript
-ant-design/ant-design                            # 99k stars, TypeScript
-tailwindlabs/tailwindcss                         # 97k stars, TypeScript
-puppeteer/puppeteer                              # 95k stars, TypeScript
-microsoft/playwright                             # 95k stars, TypeScript
+# --- typescript ----------------------------------------------------
+freeCodeCamp/freeCodeCamp                          #  454794 stars  TypeScript   2026-08-31
+openclaw/openclaw                                  #  388292 stars  TypeScript   2026-09-01
+deepseek-ai/deepseek-harness                       #  206445 stars  TypeScript   2026-08-31
+n8n-io/n8n                                         #  202976 stars  TypeScript   2026-08-31
+anomalyco/opencode                                 #  202841 stars  TypeScript   2026-09-01
+microsoft/vscode                                   #  190103 stars  TypeScript   2026-09-01
+firecrawl/firecrawl                                #  174847 stars  TypeScript   2026-08-31
+langgenius/dify                                    #  154026 stars  TypeScript   2026-09-01
+clash-verge-rev/clash-verge-rev                    #  141371 stars  TypeScript   2026-08-31
+iptv-org/iptv                                      #  137210 stars  TypeScript   2026-09-01
+excalidraw/excalidraw                              #  130880 stars  TypeScript   2026-08-31
+garrytan/gstack                                    #  130643 stars  TypeScript   2026-09-01
+shadcn-ui/ui                                       #  122666 stars  TypeScript   2026-08-31
+immich-app/immich                                  #  113106 stars  TypeScript   2026-08-31
+supabase/supabase                                  #  108657 stars  TypeScript   2026-09-01
+google-gemini/gemini-cli                           #  106754 stars  TypeScript   2026-08-31
+angular/angular                                    #  101019 stars  TypeScript   2026-08-31
+earendil-works/pi                                  #   99985 stars  TypeScript   2026-09-01
+ant-design/ant-design                              #   99320 stars  TypeScript   2026-09-01
+tailwindlabs/tailwindcss                           #   97414 stars  TypeScript   2026-08-31
+puppeteer/puppeteer                                #   95531 stars  TypeScript   2026-08-31
+microsoft/playwright                               #   95437 stars  TypeScript   2026-08-31
 
-# --- vue -------------------------------------------------------
-hoppscotch/hoppscotch                            # 80k stars, TypeScript
-marktext/marktext                                # 60k stars, TypeScript
-nuxt/nuxt                                        # 60k stars, TypeScript
-lyswhut/lx-music-desktop                         # 53k stars, TypeScript
-prettier/prettier                                # 52k stars, JavaScript
-TanStack/query                                   # 50k stars, TypeScript
-slidevjs/slidev                                  # 48k stars, TypeScript
-dcloudio/uni-app                                 # 41k stars, JavaScript
-vuetifyjs/vuetify                                # 41k stars, TypeScript
-YunaiV/ruoyi-vue-pro                             # 39k stars, Java
-ueberdosis/tiptap                                # 38k stars, TypeScript
-directus/directus                                # 37k stars, TypeScript
-NervJS/taro                                      # 37k stars, TypeScript
-qier222/YesPlayMusic                             # 33k stars, Vue
-docsifyjs/docsify                                # 31k stars, JavaScript
-tailwindlabs/headlessui                          # 28k stars, TypeScript
-TanStack/table                                   # 28k stars, TypeScript
-element-plus/element-plus                        # 27k stars, TypeScript
-quasarframework/quasar                           # 27k stars, JavaScript
-Molunerfinn/PicGo                                # 27k stars, TypeScript
+# --- vue -----------------------------------------------------------
+hoppscotch/hoppscotch                              #   80128 stars  TypeScript   2026-08-31
+marktext/marktext                                  #   60819 stars  TypeScript   2026-07-27
+nuxt/nuxt                                          #   60810 stars  TypeScript   2026-08-31
+lyswhut/lx-music-desktop                           #   53228 stars  TypeScript   2026-08-25
+prettier/prettier                                  #   52228 stars  JavaScript   2026-08-31
+TanStack/query                                     #   50240 stars  TypeScript   2026-08-31
+slidevjs/slidev                                    #   48366 stars  TypeScript   2026-08-25
+dcloudio/uni-app                                   #   41605 stars  JavaScript   2026-08-31
+vuetifyjs/vuetify                                  #   41042 stars  TypeScript   2026-08-31
+YunaiV/ruoyi-vue-pro                               #   39087 stars  Java         2026-08-30
+ueberdosis/tiptap                                  #   38211 stars  TypeScript   2026-08-31
+directus/directus                                  #   37664 stars  TypeScript   2026-08-31
+NervJS/taro                                        #   37659 stars  TypeScript   2026-08-31
+qier222/YesPlayMusic                               #   33230 stars  Vue          2026-06-14
+docsifyjs/docsify                                  #   31494 stars  JavaScript   2026-08-28
+tailwindlabs/headlessui                            #   28729 stars  TypeScript   2026-04-13
+TanStack/table                                     #   28395 stars  TypeScript   2026-08-31
+element-plus/element-plus                          #   27725 stars  TypeScript   2026-08-31
+quasarframework/quasar                             #   27204 stars  JavaScript   2026-08-28
+Molunerfinn/PicGo                                  #   27104 stars  TypeScript   2026-08-23
 
-# --- web-framework ---------------------------------------------
-flutter/flutter                                  # 178k stars, Dart
-pallets/flask                                    # 72k stars, Python
-expo/expo                                        # 51k stars, TypeScript
-zeromicro/go-zero                                # 33k stars, Go
-yewstack/yew                                     # 32k stars, Rust
-labstack/echo                                    # 32k stars, Go
-honojs/hono                                      # 32k stars, TypeScript
-vapor/vapor                                      # 26k stars, Swift
-rwf2/Rocket                                      # 25k stars, Rust
-kataras/iris                                     # 25k stars, Go
-clockworklabs/SpacetimeDB                        # 25k stars, Rust
-phoenixframework/phoenix                         # 23k stars, Elixir
-gofr-dev/gofr                                    # 20k stars, Go
-adonisjs/core                                    # 19k stars, TypeScript
-sanic-org/sanic                                  # 18k stars, Python
-ktorio/ktor                                      # 14k stars, Kotlin
-playframework/playframework                      # 12k stars, Scala
-sinatra/sinatra                                  # 12k stars, Ruby
-frappe/frappe                                    # 10k stars, Python
-cakephp/cakephp                                  # 8k stars, PHP
-bottlepy/bottle                                  # 8k stars, Python
-dropwizard/dropwizard                            # 8k stars, Java
-gobuffalo/buffalo                                # 8k stars, Go
-javalin/javalin                                  # 8k stars, Kotlin
+# --- web-framework -------------------------------------------------
+flutter/flutter                                    #  178733 stars  Dart         2026-09-01
+pallets/flask                                      #   72164 stars  Python       2026-08-16
+expo/expo                                          #   51939 stars  TypeScript   2026-08-31
+zeromicro/go-zero                                  #   33296 stars  Go           2026-08-31
+yewstack/yew                                       #   32790 stars  Rust         2026-08-28
+labstack/echo                                      #   32672 stars  Go           2026-08-24
+honojs/hono                                        #   32047 stars  TypeScript   2026-08-28
+vapor/vapor                                        #   26196 stars  Swift        2026-08-31
+rwf2/Rocket                                        #   25782 stars  Rust         2025-12-28
+kataras/iris                                       #   25563 stars  Go           2026-07-27
+clockworklabs/SpacetimeDB                          #   25086 stars  Rust         2026-09-01
+phoenixframework/phoenix                           #   23137 stars  Elixir       2026-08-31
+gofr-dev/gofr                                      #   20960 stars  Go           2026-08-31
+adonisjs/core                                      #   19104 stars  TypeScript   2026-08-27
+sanic-org/sanic                                    #   18647 stars  Python       2026-07-29
+ktorio/ktor                                        #   14507 stars  Kotlin       2026-08-31
+playframework/playframework                        #   12620 stars  Scala        2026-08-31
+sinatra/sinatra                                    #   12449 stars  Ruby         2026-07-20
+frappe/frappe                                      #   10672 stars  Python       2026-09-01
+cakephp/cakephp                                    #    8795 stars  PHP          2026-08-28
+bottlepy/bottle                                    #    8777 stars  Python       2026-07-19
+dropwizard/dropwizard                              #    8577 stars  Java         2026-08-31
+gobuffalo/buffalo                                  #    8413 stars  Go           2026-03-21
+javalin/javalin                                    #    8342 stars  Kotlin       2026-08-31
 

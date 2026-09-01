@@ -205,6 +205,9 @@ pub struct Upstream {
     pub pushed_at: String,
     pub stars: i64,
     pub archived: bool,
+    /// SPDX identifier, e.g. `MIT`. Empty when the repo declares none.
+    pub license: String,
+    pub description: String,
 }
 
 /// Fetch a JSON endpoint as text, with the shared auth and user-agent headers.
@@ -300,6 +303,17 @@ pub fn fetch_metadata(stored: &str) -> Result<Upstream> {
         pushed_at: meta["pushed_at"].as_str().unwrap_or_default().to_string(),
         stars: meta["stargazers_count"].as_i64().unwrap_or(0),
         archived: meta["archived"].as_bool().unwrap_or(false),
+        license: meta["license"]["spdx_id"]
+            .as_str()
+            .filter(|id| *id != "NOASSERTION")
+            .unwrap_or_default()
+            .to_string(),
+        description: meta["description"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(120)
+            .collect(),
     })
 }
 

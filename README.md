@@ -299,7 +299,12 @@ requests with a captcha page unless it recognises the client. Getting past that
 would mean impersonating another tool to evade their bot check, so the request
 is made honestly and the failure reported.
 
-The GitHub API is only used for discovery and for the optional star and commit-date metadata that `decay` needs. Plain `add` never touches it.
+`add` records the star count, licence, last-commit date and description
+alongside the code, which is one GitHub API call per repository. Without a
+`GITHUB_TOKEN` that quota is 60 an hour, so on a large batch the rest arrive
+without those extras. The code itself always lands either way, because it comes
+from codeload, which is not rate limited. Pass `--no-metadata` to skip the calls
+and go faster.
 
 ```
 src/filters.rs  what earns disk space

@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS repos (
 ALTER TABLE repos ADD COLUMN pushed_at TEXT;
 ALTER TABLE repos ADD COLUMN stars INTEGER;
 ALTER TABLE repos ADD COLUMN archived INTEGER;
+-- License matters when an agent adapts a pattern: copying from GPL code into a
+-- proprietary project is a real problem, and the agent cannot know unless we
+-- record it. Description is a one-line hint of what the repo is for.
+ALTER TABLE repos ADD COLUMN license TEXT;
+ALTER TABLE repos ADD COLUMN description TEXT;
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY,
     repo_id INTEGER NOT NULL REFERENCES repos(id),
@@ -73,6 +78,12 @@ pub struct RepoSummary {
     /// several times larger and would not reconcile with the total.
     pub disk_bytes: i64,
     pub pushed_at: String,
+    /// Star count, zero when never fetched.
+    pub stars: i64,
+    /// SPDX identifier, e.g. `MIT`. Empty when unknown.
+    pub license: String,
+    /// One-line summary from the repository's own metadata.
+    pub description: String,
     /// Language holding the most indexed bytes. Derived from what was actually
     /// kept, not GitHub's label, so it reflects the code in the corpus after
     /// filtering.
@@ -161,20 +172,25 @@ impl Store {
             params![name],
         )?;
         self.db.execute(
-            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, stars, archived) \
-             VALUES (?1, ?2, datetime('now'), ?3, ?4, ?5) \
+            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, stars, archived, \
+             license, description) \
+             VALUES (?1, ?2, datetime('now'), ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
              indexed_at = excluded.indexed_at, \
              pushed_at = COALESCE(NULLIF(excluded.pushed_at, ''), pushed_at), \
              stars = CASE WHEN excluded.stars > 0 THEN excluded.stars ELSE stars END, \
              archived = CASE WHEN excluded.pushed_at <> '' \
-                             THEN excluded.archived ELSE archived END",
+                             THEN excluded.archived ELSE archived END, \
+             license = COALESCE(NULLIF(excluded.license, ''), license), \
+             description = COALESCE(NULLIF(excluded.description, ''), description)",
             params![
                 name,
                 upstream.commit_sha,
                 upstream.pushed_at,
                 upstream.stars,
-                upstream.archived as i64
+                upstream.archived as i64,
+                upstream.license,
+                upstream.description
             ],
         )?;
         Ok(self.db.query_row(
@@ -485,7 +501,8 @@ impl Store {
         let mut statement = self.db.prepare(
             "SELECT r.name, COALESCE(r.commit_sha, ''), COALESCE(r.indexed_at, ''), \
              COUNT(d.id), COALESCE(SUM(d.raw_size), 0), COALESCE(SUM(d.length), 0), \
-             COALESCE(r.pushed_at, ''), \
+             COALESCE(r.pushed_at, ''), COALESCE(r.stars, 0), \
+             COALESCE(r.license, ''), COALESCE(r.description, ''), \
              COALESCE(( \
                  SELECT language FROM documents \
                  WHERE repo_id = r.id AND offset >= 0 \
@@ -504,7 +521,10 @@ impl Store {
                     source_bytes: row.get(4)?,
                     disk_bytes: row.get(5)?,
                     pushed_at: row.get(6)?,
-                    language: row.get(7)?,
+                    stars: row.get(7)?,
+                    license: row.get(8)?,
+                    description: row.get(9)?,
+                    language: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

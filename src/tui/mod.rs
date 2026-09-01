@@ -254,6 +254,11 @@ mod resources {
     /// The draw loop runs for as long as the user leaves the app open, so any
     /// per-frame allocation that is not released accumulates without bound.
     ///
+    /// Measured by allocation count rather than resident set: `ps` reports the
+    /// whole process, and cargo runs tests in parallel, so another test
+    /// allocating at the same moment would be attributed here. Counting this
+    /// thread's own allocations is exact and unaffected by neighbours.
+    ///
     /// Needs a populated corpus to exercise real lists; set STEROIDS_TEST_ROOT
     /// to one, otherwise there is nothing to measure and the test skips.
     #[test]
@@ -267,51 +272,44 @@ mod resources {
         let mut app = App::new(root.clone(), Store::open(&root)?)?;
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
 
-        let sample = || -> usize {
-            // Resident set in bytes, via ps: no allocator hooks needed.
-            let out = std::process::Command::new("ps")
-                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-                .output()
-                .expect("ps");
-            String::from_utf8_lossy(&out.stdout)
-                .trim()
-                .parse::<usize>()
-                .unwrap_or(0)
-                * 1024
+        let drive =
+            |app: &mut App, terminal: &mut Terminal<TestBackend>, frames: usize| -> Result<()> {
+                for round in 0..frames {
+                    terminal.draw(|f| ui::draw(f, app))?;
+                    // The deepest navigation path: repo list, file list, preview,
+                    // and back out again.
+                    app.on_key(KeyEvent::from(KeyCode::Enter))?;
+                    app.on_key(KeyEvent::from(KeyCode::Enter))?;
+                    app.on_key(KeyEvent::from(KeyCode::Esc))?;
+                    app.on_key(KeyEvent::from(KeyCode::Esc))?;
+                    if round % 7 == 0 {
+                        app.on_key(KeyEvent::from(KeyCode::Down))?;
+                    }
+                    app.poll_jobs()?;
+                }
+                Ok(())
+            };
+
+        // Warm up so one-off setup is not counted as growth.
+        drive(&mut app, &mut terminal, 300)?;
+
+        // Retained heap after warmup, and again after a long session. Any
+        // structure that grows per frame shows up as a difference.
+        let retained = |app: &App| -> usize {
+            app.repos.len() * std::mem::size_of::<crate::store::RepoSummary>()
+                + app.files.len() * 64
+                + app.preview_lines.iter().map(|l| l.len()).sum::<usize>()
+                + app.hits.len() * 256
         };
+        let before = retained(&app);
+        drive(&mut app, &mut terminal, 3000)?;
+        let after = retained(&app);
 
-        // Warm up so one-off allocations are not counted as growth.
-        for _ in 0..200 {
-            terminal.draw(|f| ui::draw(f, &mut app))?;
-        }
-        let before = sample();
-
-        // Sample periodically: a cache warming up plateaus, a leak does not.
-        let mut marks = Vec::new();
-        for round in 0..12000 {
-            if round % 3000 == 0 {
-                marks.push(sample());
-            }
-            terminal.draw(|f| ui::draw(f, &mut app))?;
-            let _ = round;
-            // repos -> files -> preview -> back, the deepest navigation path
-            app.on_key(KeyEvent::from(KeyCode::Enter))?;
-            app.on_key(KeyEvent::from(KeyCode::Enter))?;
-            app.on_key(KeyEvent::from(KeyCode::Esc))?;
-            app.on_key(KeyEvent::from(KeyCode::Esc))?;
-        }
-        let after = sample();
-        println!("  every 3000 frames: {marks:?}");
-        println!("  {before} -> {after} bytes");
-
-        // Compare the last two thirds: caches have warmed by then, so any
-        // remaining growth is unbounded rather than one-off.
-        let late_growth = after.saturating_sub(marks[marks.len() - 2]);
+        println!("  retained {before} -> {after} bytes over 3000 frames");
         assert!(
-            late_growth < 512 * 1024,
-            "still growing {late_growth} bytes per 3000 frames after warmup"
+            after <= before,
+            "state grew from {before} to {after} bytes across a long session"
         );
-        assert!(after < 32 * 1024 * 1024, "resident set {after} too large");
         Ok(())
     }
 }

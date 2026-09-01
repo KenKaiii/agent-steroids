@@ -54,10 +54,11 @@ enum Command {
         /// Keep test files, which are excluded by default
         #[arg(long)]
         include_tests: bool,
-        /// Also record stars and last-commit date, which `decay` needs.
-        /// Costs one rate-limited API call per repository.
+        /// Skip the star count and last-commit date. Those cost one
+        /// rate-limited API call each, so a batch of hundreds is faster
+        /// without them, at the cost of `decay` having nothing to judge.
         #[arg(long)]
-        metadata: bool,
+        no_metadata: bool,
     },
     /// Build the trigram index. Run after any add.
     Index,
@@ -175,6 +176,34 @@ fn corpus_root(flag: Option<PathBuf>) -> PathBuf {
     }
 }
 
+/// A repository name as a terminal hyperlink to its GitHub page.
+///
+/// Uses the OSC 8 escape, which terminals that do not understand it ignore
+/// entirely, so the text still lines up in a column either way. The padding is
+/// applied to the visible name, since the escape sequence has no width.
+fn link(repo: &str, width: usize) -> String {
+    let padded = format!("{repo:<width$}");
+    // Only a terminal understands the escape. Piped or redirected output must
+    // stay plain text, or the sequence shows up as literal rubbish in a file.
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return padded;
+    }
+    // A gitee: prefix is our own, not part of the URL.
+    let Some(bare) = repo.strip_prefix("gitee:") else {
+        return format!("\u{1b}]8;;https://github.com/{repo}\u{7}{padded}\u{1b}]8;;\u{7}");
+    };
+    format!("\u{1b}]8;;https://gitee.com/{bare}\u{7}{padded}\u{1b}]8;;\u{7}")
+}
+
+/// Star count, blank when unknown rather than a misleading zero.
+fn stars(count: i64) -> String {
+    match count {
+        0 => String::new(),
+        n if n >= 1000 => format!("{}k*", n / 1000),
+        n => format!("{n}*"),
+    }
+}
+
 fn human(bytes: f64) -> String {
     for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("KB", 1e3)] {
         if bytes >= scale {
@@ -199,7 +228,7 @@ fn main() -> Result<()> {
             repos,
             from_file,
             include_tests,
-            metadata,
+            no_metadata,
         } => {
             let mut names = repos;
             if let Some(path) = from_file {
@@ -218,7 +247,7 @@ fn main() -> Result<()> {
                 &mut store,
                 &names,
                 include_tests,
-                metadata,
+                !no_metadata,
                 parallel,
                 &Default::default(),
             )? > 0
@@ -424,6 +453,10 @@ fn main() -> Result<()> {
                             "disk_bytes": summary.disk_bytes,
                             "source_bytes": summary.source_bytes,
                             "last_commit": summary.pushed_at,
+                            "stars": summary.stars,
+                            "license": summary.license,
+                            "description": summary.description,
+                            "url": format!("https://github.com/{}", summary.name),
                         })
                     })
                     .collect();
@@ -433,11 +466,12 @@ fn main() -> Result<()> {
             } else {
                 for summary in &rows {
                     println!(
-                        "  {:<40} {:<12} {:>5} files  {:>8}  {}  {}",
-                        summary.name,
+                        "  {:<40} {:<12} {:>5} files  {:>8}  {:>7}  {}  {}",
+                        link(&summary.name, 40),
                         summary.language,
                         summary.files,
                         human(summary.disk_bytes as f64),
+                        stars(summary.stars),
                         &summary.commit_sha[..8.min(summary.commit_sha.len())],
                         summary.indexed_at
                     );
