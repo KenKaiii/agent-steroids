@@ -54,6 +54,21 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
 }
 
+/// Longest context line shown. Generated or data-heavy source can hold a
+/// single line of hundreds of kilobytes, and one such match would otherwise
+/// fill a reader's whole context with something they cannot use.
+const MAX_LINE_CHARS: usize = 400;
+
+/// Shorten a line to something readable, noting what was cut.
+fn clamp(line: &str) -> String {
+    if line.chars().count() <= MAX_LINE_CHARS {
+        return line.to_string();
+    }
+    let kept: String = line.chars().take(MAX_LINE_CHARS).collect();
+    let dropped = line.chars().count() - MAX_LINE_CHARS;
+    format!("{kept}… [{dropped} more characters]")
+}
+
 /// A repository with no commit in this long is worth flagging: its patterns may
 /// predate current practice in a field that moves quickly.
 const STALE_AFTER_DAYS: u64 = 365;
@@ -131,7 +146,10 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             for (offset, line) in item.context.iter().enumerate() {
                 let number = start + offset;
                 let marker = if number == item.line_number { ">" } else { " " };
-                out.push_str(&format!("{marker} {number:>width$} \u{2502} {line}\n"));
+                out.push_str(&format!(
+                    "{marker} {number:>width$} \u{2502} {}\n",
+                    clamp(line)
+                ));
             }
         }
     }
@@ -171,5 +189,33 @@ pub fn render_empty(facts: &Facts) -> String {
             "No matches. {scope} The pattern has no literal run of 3+ characters to search \
              on; add one, e.g. a function or parameter name."
         ),
+    }
+}
+
+#[cfg(test)]
+mod line_length_tests {
+    use crate::search::Match;
+
+    /// A match inside a very long line must not dump the whole line into the
+    /// reader's context. Minified files are filtered out at ingest, but a
+    /// legitimate source file can still hold one enormous generated line.
+    #[test]
+    fn long_match_line_is_truncated() {
+        let huge = format!("const DATA = '{}'; // needle", "x".repeat(150_000));
+        let item = Match {
+            repo: "a/b".into(),
+            path: "src/big.js".into(),
+            line_number: 1,
+            context: vec![huge],
+            scope: String::new(),
+            commit_sha: String::new(),
+            pushed_at: String::new(),
+        };
+        let out = super::render_matches(std::slice::from_ref(&item), "1 match");
+        assert!(
+            out.len() < 4_000,
+            "one match produced {} bytes of output",
+            out.len()
+        );
     }
 }

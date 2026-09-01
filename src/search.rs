@@ -552,6 +552,61 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// How useful a match is likely to be, higher is better.
+///
+/// A reader looking for `RetryPolicy` almost always wants the place it is
+/// defined, not the twentieth place it is passed as an argument.
+fn relevance(item: &Match) -> u32 {
+    let line = item
+        .context
+        .get(item.line_number.saturating_sub(item.context_start()))
+        .map(String::as_str)
+        .unwrap_or("");
+    let trimmed = line.trim_start();
+
+    // Start above zero so penalties have room to bite.
+    let mut score: u32 = 1000;
+    // A definition is what someone is usually after.
+    const DEFINITION_KEYWORDS: &[&str] = &[
+        "def ",
+        "class ",
+        "func ",
+        "fn ",
+        "type ",
+        "struct ",
+        "interface ",
+        "impl ",
+        "enum ",
+        "trait ",
+        "pub fn ",
+        "export ",
+        "async def ",
+        "public ",
+        "private ",
+    ];
+    if DEFINITION_KEYWORDS
+        .iter()
+        .any(|word| trimmed.starts_with(word))
+    {
+        score += 7000;
+    }
+    // An import or re-export names a thing without showing how it works.
+    const WEAK_PREFIXES: &[&str] = &["import ", "from ", "use ", "#include", "require(", "@"];
+    // The penalty has to outweigh the line-length bonus below, or a short
+    // import would outrank a longer line that actually does something.
+    if WEAK_PREFIXES.iter().any(|word| trimmed.starts_with(word)) {
+        score = score.saturating_sub(600);
+    }
+    // Shorter lines carry less noise around the match, but this is a
+    // tiebreaker and must stay small next to the signals above.
+    score += 200u32.saturating_sub(line.len().min(200) as u32);
+    // Tests demonstrate usage but are rarely the implementation being sought.
+    if item.path.contains("test") || item.path.contains("spec") {
+        score = score.saturating_sub(300);
+    }
+    score
+}
+
 /// Whether a pattern switches on case-insensitive matching by itself.
 ///
 /// Only leading group flags are considered, since a flag set mid-pattern
@@ -740,6 +795,15 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         .into_iter()
         .filter_map(|repo| by_repo.remove(&repo).map(|v| v.into_iter()))
         .collect();
+    // Rank each repository's hits before interleaving, so the strongest match
+    // from every project is what fills the page. Weights follow the same idea
+    // as zoekt's: a definition beats a whole-word use, which beats an
+    // incidental substring. Ordering only within a repository keeps the
+    // round-robin fairness that spreads results across projects.
+    for queue in by_repo.values_mut() {
+        queue.sort_by_key(|item| std::cmp::Reverse(relevance(item)));
+    }
+
     let mut results = Vec::new();
     let gathered: usize = queues.iter().map(|q| q.len()).sum();
     if gathered > query.limit {
@@ -764,6 +828,32 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
 #[cfg(test)]
 mod tests {
+    /// A definition should outrank a use of the same name: someone searching
+    /// for a symbol almost always wants where it is declared.
+    #[test]
+    fn definitions_outrank_uses() {
+        let make = |line: &str, path: &str| super::Match {
+            repo: "a/b".into(),
+            path: path.into(),
+            line_number: 1,
+            context: vec![line.to_string()],
+            scope: String::new(),
+            commit_sha: String::new(),
+            pushed_at: String::new(),
+        };
+        let definition = make("pub struct RetryPolicy {", "src/retry.rs");
+        let import = make("use crate::retry::RetryPolicy;", "src/main.rs");
+        let usage = make("    let policy = RetryPolicy::new(3);", "src/main.rs");
+        let in_test = make("pub struct RetryPolicy {", "tests/retry_test.rs");
+
+        assert!(super::relevance(&definition) > super::relevance(&usage));
+        assert!(super::relevance(&usage) > super::relevance(&import));
+        assert!(
+            super::relevance(&definition) > super::relevance(&in_test),
+            "a definition in a test should rank below the real one"
+        );
+    }
+
     /// `define Foo` must not match `parseFoo`: a use is not a definition, and
     /// returning one sends the reader to the wrong file.
     #[test]

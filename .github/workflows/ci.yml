@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      # Tests needing a populated corpus skip themselves when
+      # STEROIDS_TEST_ROOT is unset, which is the case here.
+      - name: Tests
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      # A first run must work end to end for a new user, so exercise the real
+      # binary against a real repository rather than trusting unit tests alone.
+      - name: Smoke test
+        run: |
+          ./target/release/steroids --root /tmp/ci add antirez/smallchat
+          ./target/release/steroids --root /tmp/ci index
+          ./target/release/steroids --root /tmp/ci search 'int main' --limit 1
+          ./target/release/steroids --root /tmp/ci repos
