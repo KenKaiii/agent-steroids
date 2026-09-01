@@ -32,11 +32,7 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      # A first run must work end to end for a new user, so exercise the real
-      # binary against a real repository rather than trusting unit tests alone.
-      - name: Smoke test
-        run: |
-          ./target/release/steroids --root /tmp/ci add antirez/smallchat
-          ./target/release/steroids --root /tmp/ci index
-          ./target/release/steroids --root /tmp/ci search 'int main' --limit 1
-          ./target/release/steroids --root /tmp/ci repos
+      # Every command an agent can run, including its failure paths and exit
+      # codes. Unit tests cover the engine; this covers the surface.
+      - name: Command tests
+        run: BIN=./target/release/steroids bash tests/commands.sh

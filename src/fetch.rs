@@ -397,6 +397,11 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
         // date, so the last-commit date that decay needs comes free with the
         // download. Asking the REST API for it would cost one rate-limited
         // request per repository and cap a bulk update at 60 an hour.
+        //
+        // This is the date of the last commit that changed the tree, which can
+        // be earlier than the API's pushed_at: that also counts merges, tag
+        // pushes and CI commits. For judging whether a project is still worth
+        // learning from, when the code last changed is the better signal.
         if upstream.pushed_at.is_empty()
             && let Ok(mtime) = entry.header().mtime()
             && mtime > 0

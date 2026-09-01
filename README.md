@@ -338,10 +338,15 @@ cargo install --path .
 ```
 
 ```bash
-cargo test --release      # 25 tests
+cargo test --release                       # engine and unit tests
+bash tests/commands.sh                     # every command, including failures
 cargo clippy --release --all-targets -- -D warnings
 cargo fmt
 ```
+
+`tests/commands.sh` runs each command an agent can call and asserts on both the
+output and the exit code, since a command that prints an error and exits 0
+looks like success to whatever called it. It needs network access.
 
 Some tests need a populated corpus and skip without one. Point them at yours:
 
