@@ -660,6 +660,20 @@ impl Store {
         Ok(updated > 0)
     }
 
+    /// Every language present in the indexed files.
+    ///
+    /// Taken from the documents rather than each repository's main language: a
+    /// Python project can still hold the SQL or shell someone is looking for.
+    pub fn languages(&self) -> Result<Vec<String>> {
+        let mut statement = self
+            .db
+            .prepare("SELECT DISTINCT language FROM documents WHERE offset >= 0")?;
+        let rows = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
+    }
+
     /// Repositories carrying a tag, or all of them when `tag` is None.
     pub fn repos_tagged(&self, tag: Option<&str>) -> Result<Vec<RepoSummary>> {
         let all = self.list_repos()?;

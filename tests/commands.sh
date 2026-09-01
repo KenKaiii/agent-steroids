@@ -86,6 +86,13 @@ ok "tag list shows it"         0 "demo"          -- "$BIN" tag
 ok "repos --tag"               0 "smallchat"     -- "$BIN" repos --tag demo
 ok "search --tag"              0 ""              -- "$BIN" search "int" --tag demo --limit 1
 ok "stats"                     0 "total on disk" -- "$BIN" stats
+
+# A filter that excludes everything is not a failed search. Saying "no matches"
+# sends the caller rewriting a query that was never the problem.
+ok "unknown --repo names itself"     0 "not in this corpus"   -- "$BIN" search int --repo ghost/x
+ok "absent --language names itself"  0 "no cobol files"       -- "$BIN" search int --language cobol
+ok "unknown --tag names itself"      0 "no repositories are tagged" -- "$BIN" search int --tag ghost
+ok "valid --repo still searches"     0 "match"                -- "$BIN" search int --repo antirez/smallchat --limit 1
 ok "update"                    0 "up to date"    -- "$BIN" update
 ok "compact"                   0 "reclaimed"     -- "$BIN" compact
 ok "remove"                    0 "removed"       -- "$BIN" remove antirez/smallchat

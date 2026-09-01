@@ -409,8 +409,37 @@ fn main() -> Result<()> {
                 skip_comments: !include_comments,
                 ..Query::new(limit)
             };
-            // An unknown tag matches nothing, and blaming the pattern for that
-            // sends the agent rewriting a query that was never the problem.
+            // A filter that excludes everything is not a failed search, and
+            // blaming the pattern sends the agent rewriting a query that was
+            // never the problem. Check the filters before running it.
+            if let Some(repo) = &repo
+                && !store.list_repos()?.iter().any(|r| &r.name == repo)
+            {
+                let count = store.list_repos()?.len();
+                println!(
+                    "'{repo}' is not in this corpus, so no search can match it. \
+                     {count} repositories are indexed; run `steroids repos` to see \
+                     them, or `steroids add {repo}` to index this one."
+                );
+                return Ok(());
+            }
+            if let Some(language) = &language {
+                // Every language in the indexed files, not just each
+                // repository's main one: a Python project can still hold the
+                // shell or SQL being searched for.
+                let known: std::collections::BTreeSet<String> =
+                    store.languages()?.into_iter().collect();
+                if !known.contains(&language.to_lowercase()) {
+                    println!(
+                        "No {language} files are indexed, so no search can match. \
+                         Languages present: {}. Drop --language, or index a \
+                         {language} project with \
+                         `steroids discover 'language:{language}' --add`.",
+                        known.into_iter().collect::<Vec<_>>().join(", ")
+                    );
+                    return Ok(());
+                }
+            }
             if let Some(tag) = &tag
                 && store.repos_tagged(Some(tag))?.is_empty()
             {
