@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/KenKaiii/agent-steroids"><img src="https://img.shields.io/github/stars/KenKaiii/agent-steroids?style=for-the-badge&label=Stars&color=yellow" alt="Star Agent Steroids on GitHub"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Built with Rust"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge" alt="AGPL-3.0 License"></a>
   <a href="https://youtube.com/@kenkaidoesai"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube"></a>
   <a href="https://skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Community-7C3AED?style=for-the-badge" alt="Skool"></a>
 </p>
@@ -229,7 +229,7 @@ src/tui/        the interactive browser
 - [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
 - [Skool community](https://skool.com/kenkai)
 
-MIT licensed. Use it, change it, ship it, sell it. Just keep the copyright notice.
+AGPL-3.0 licensed. Use it, change it, ship it. If you run a modified version as a service, share your changes under the same license.
 
 ---
 
