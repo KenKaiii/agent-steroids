@@ -273,9 +273,10 @@ impl App {
                     .matches
                     .into_iter()
                     .map(|item| SearchHit {
-                        // Context starts `context_lines` above the hit, except
-                        // near the top of a file where it is clamped.
-                        context_offset: (item.line_number - 1).min(search::DEFAULT_CONTEXT_LINES),
+                        // Derive from the match's own context start, so the
+                        // highlight stays on the matched line whatever the
+                        // context width happens to be.
+                        context_offset: item.line_number - item.context_start(),
                         repo: item.repo,
                         path: item.path,
                         line_number: item.line_number,

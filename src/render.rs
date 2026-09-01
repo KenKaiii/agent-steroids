@@ -221,6 +221,7 @@ mod line_length_tests {
             context: vec![huge],
             scope: String::new(),
             commit_sha: String::new(),
+            context_first_line: 1,
             pushed_at: String::new(),
         };
         let out = super::render_matches(std::slice::from_ref(&item), "1 match");

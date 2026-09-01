@@ -81,6 +81,10 @@ enum Command {
         /// Include hits inside comments and docstrings
         #[arg(long)]
         include_comments: bool,
+        /// Lines of code shown either side of a match. Raise it when comparing
+        /// how several projects implement the same thing.
+        #[arg(short = 'C', long, default_value_t = search::DEFAULT_CONTEXT_LINES)]
+        context: usize,
         #[arg(long, default_value_t = 20)]
         limit: usize,
         /// Emit JSON instead of text
@@ -397,6 +401,7 @@ fn main() -> Result<()> {
             path,
             ignore_case,
             include_comments,
+            context,
             limit,
             json,
         } => {
@@ -407,6 +412,8 @@ fn main() -> Result<()> {
                 path_glob: path.as_deref(),
                 ignore_case,
                 skip_comments: !include_comments,
+                // Capped: a huge value would paste whole files into a reply.
+                context_lines: context.min(40),
                 ..Query::new(limit)
             };
             // A filter that excludes everything is not a failed search, and

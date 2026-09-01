@@ -78,6 +78,8 @@ ok "search --language"         0 "match"         -- "$BIN" search "int" --langua
 ok "search --ignore-case"      0 "match"         -- "$BIN" search "INT MAIN" -i --limit 1
 ok "search --path glob"        0 ""              -- "$BIN" search "int" --path "*.c" --limit 1
 ok "search --include-comments" 0 ""              -- "$BIN" search "the" --include-comments --limit 1
+ok "search -C wide context"    0 "match"         -- "$BIN" search "int main" -C 10 --limit 1
+ok "search -C 0"               0 "match"         -- "$BIN" search "int main" -C 0 --limit 1
 ok "define"                    0 ""              -- "$BIN" define main --limit 1
 ok "define --json"             0 ""              -- "$BIN" define main --json --limit 1
 ok "show"                      0 "smallchat"     -- "$BIN" show antirez/smallchat smallchat-server.c

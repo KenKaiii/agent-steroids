@@ -41,6 +41,10 @@ pub struct Match {
     /// only an archive checksum was available, in which case no permalink is
     /// offered rather than a broken one.
     pub commit_sha: String,
+    /// Line number of the first line in `context`. Stored rather than derived,
+    /// because the context width is a per-query setting and recomputing it
+    /// from a default silently misnumbers the gutter.
+    pub context_first_line: usize,
     /// Date of the repository's last upstream commit, empty when unknown.
     /// Lets a reader weigh a snippet from a project that stopped moving years
     /// ago differently from one changed this week.
@@ -50,9 +54,7 @@ pub struct Match {
 impl Match {
     /// Line number of the first line of `context`.
     pub fn context_start(&self) -> usize {
-        self.line_number
-            .saturating_sub(DEFAULT_CONTEXT_LINES)
-            .max(1)
+        self.context_first_line
     }
 
     /// A GitHub permalink to the matched line, if the commit is known.
@@ -777,6 +779,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 context: lines[low..high].iter().map(|s| s.to_string()).collect(),
                 scope: enclosing_scope(&lines, number),
                 commit_sha: commit_sha.clone(),
+                context_first_line: low + 1,
                 pushed_at: pushed_at.clone(),
             });
             collected += 1;
@@ -845,6 +848,40 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
 
 #[cfg(test)]
 mod tests {
+    /// The gutter must number the lines it actually shows. Deriving the start
+    /// from a fixed default silently misnumbered every result whenever the
+    /// caller asked for a different context width, so `>` pointed at the wrong
+    /// line and the numbers were off by the difference.
+    #[test]
+    fn gutter_numbering_follows_the_requested_context() -> anyhow::Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            println!("SKIP: set STEROIDS_TEST_ROOT to a populated corpus");
+            return Ok(());
+        }
+        let mut store = crate::store::Store::open(std::path::Path::new(&root))?;
+        for width in [0usize, 1, 3, 10] {
+            let query = super::Query {
+                context_lines: width,
+                ..super::Query::new(3)
+            };
+            for hit in super::search(&mut store, "def ", &query)?.matches {
+                let offset = hit.line_number - hit.context_start();
+                assert!(
+                    offset < hit.context.len(),
+                    "context {width}: matched line {} is outside the {} shown lines",
+                    hit.line_number,
+                    hit.context.len()
+                );
+                assert!(
+                    hit.context[offset].contains("def "),
+                    "context {width}: the marked line does not contain the match"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// A definition should outrank a use of the same name: someone searching
     /// for a symbol almost always wants where it is declared.
     #[test]
@@ -856,6 +893,7 @@ mod tests {
             context: vec![line.to_string()],
             scope: String::new(),
             commit_sha: String::new(),
+            context_first_line: 1,
             pushed_at: String::new(),
         };
         let definition = make("pub struct RetryPolicy {", "src/retry.rs");
@@ -963,6 +1001,7 @@ mod tests {
             context: vec![],
             scope: String::new(),
             commit_sha: "5460f467b02e49471c0fd6cfc9ca0adab6351f98".into(),
+            context_first_line: 14,
             pushed_at: String::new(),
         };
         assert_eq!(
