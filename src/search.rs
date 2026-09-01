@@ -784,7 +784,10 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 break;
             }
         }
-        if collected >= query.limit * 4 {
+        // Gather several times the limit so ranking and the round-robin have
+        // something to choose from, then stop. Saturating because a caller
+        // asking for a very large limit would otherwise overflow.
+        if collected >= query.limit.saturating_mul(4) {
             // Stopped early, so more matches exist beyond what was gathered.
             truncated = true;
             break;

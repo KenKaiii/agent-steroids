@@ -808,6 +808,12 @@ fn main() -> Result<()> {
         }
 
         Command::Tag { add, repos } => {
+            // A tag that is only whitespace stores nothing, so reporting
+            // success would be a lie.
+            let add: Vec<String> = add
+                .into_iter()
+                .filter(|tag| !tag.trim().is_empty())
+                .collect();
             if add.is_empty() {
                 let counts = store.tag_counts()?;
                 if counts.is_empty() {

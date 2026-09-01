@@ -192,6 +192,95 @@ mod snapshot {
 }
 
 #[cfg(test)]
+mod edge_cases {
+    use super::app::{App, Screen};
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    /// A brand new user opens the app before adding anything.
+    #[test]
+    fn empty_corpus_renders_and_navigates() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
+
+        // Every screen and every key, against nothing at all.
+        for (width, height) in [(10u16, 4u16), (80, 24)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+            for screen in [
+                Screen::Repos,
+                Screen::Files,
+                Screen::Search,
+                Screen::Preview,
+            ] {
+                app.screen = screen;
+                terminal.draw(|f| ui::draw(f, &mut app))?;
+                for code in [
+                    KeyCode::Down,
+                    KeyCode::Up,
+                    KeyCode::Enter,
+                    KeyCode::Esc,
+                    KeyCode::PageDown,
+                    KeyCode::Home,
+                    KeyCode::End,
+                    KeyCode::Char('a'),
+                    KeyCode::Char('d'),
+                    KeyCode::Char('/'),
+                ] {
+                    app.on_key(KeyEvent::from(code))?;
+                    terminal.draw(|f| ui::draw(f, &mut app))?;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// Ctrl-C and Ctrl-D must not be swallowed or mishandled.
+    #[test]
+    fn control_keys_are_handled() -> Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            return Ok(());
+        }
+        let root = PathBuf::from(root);
+        let mut app = App::new(root.clone(), Store::open(&root)?)?;
+        let mut terminal = Terminal::new(TestBackend::new(90, 24))?;
+        for code in [KeyCode::Char('c'), KeyCode::Char('d'), KeyCode::Char('z')] {
+            app.on_key(KeyEvent::new(code, KeyModifiers::CONTROL))?;
+            terminal.draw(|f| ui::draw(f, &mut app))?;
+        }
+        Ok(())
+    }
+
+    /// Typing far more than fits, then deleting all of it.
+    #[test]
+    fn oversized_input_is_survivable() -> Result<()> {
+        let root = std::env::var("STEROIDS_TEST_ROOT").unwrap_or_default();
+        if root.is_empty() {
+            return Ok(());
+        }
+        let root = PathBuf::from(root);
+        let mut app = App::new(root.clone(), Store::open(&root)?)?;
+        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+        app.on_key(KeyEvent::from(KeyCode::Char('/')))?;
+        for c in "((((((((((".chars().chain("x".repeat(600).chars()) {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)))?;
+        }
+        app.run_search()?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+        for _ in 0..700 {
+            app.on_key(KeyEvent::from(KeyCode::Backspace))?;
+        }
+        app.run_search()?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod interaction {
     use super::app::{App, Screen};
     use super::*;
