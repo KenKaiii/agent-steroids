@@ -964,6 +964,9 @@ pub fn scratch_dir(label: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    // Cleanup at the end of a test is best effort for the same reason: a
+    // Store may still hold the lock file when it runs.
+    //
     // Nanoseconds as well as a counter, and no attempt to clear the path:
     // Windows cannot delete a directory whose lock file a previous run still
     // holds open, so never reuse a name rather than trying to empty one.
@@ -1037,7 +1040,7 @@ mod tests {
             assert_eq!(stored, content.as_bytes(), "document {i} corrupted");
         }
 
-        std::fs::remove_dir_all(&directory)?;
+        let _ = std::fs::remove_dir_all(&directory);
         Ok(())
     }
 
@@ -1074,7 +1077,7 @@ mod tests {
             "a repository with no content was still listed"
         );
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1103,7 +1106,7 @@ mod tests {
             "asking for a specific missing document should still be an error"
         );
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1142,7 +1145,7 @@ mod tests {
         let mut reopened = Store::open(&dir)?;
         assert_eq!(reopened.read_document(ids[0])?, payload);
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1181,7 +1184,7 @@ mod tests {
             "a writer deleted a compaction newer than the committed generation"
         );
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1224,7 +1227,7 @@ mod tests {
                 "document {id} came back corrupted"
             );
         }
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1303,7 +1306,7 @@ mod tests {
         );
         assert!(!with_archived.contains(&"fresh/repo".to_string()));
 
-        std::fs::remove_dir_all(&directory)?;
+        let _ = std::fs::remove_dir_all(&directory);
         Ok(())
     }
 
@@ -1342,7 +1345,7 @@ mod tests {
         assert_eq!(pushed, "2020-01-01T00:00:00Z", "last-commit date erased");
         assert_eq!(archived, 1, "archived flag erased");
 
-        std::fs::remove_dir_all(&directory)?;
+        let _ = std::fs::remove_dir_all(&directory);
         Ok(())
     }
 

@@ -352,7 +352,7 @@ mod tests {
             assert!(!rebuilt[i].is_empty(), "{pattern} matched nothing at all");
         }
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

@@ -344,7 +344,7 @@ mod jobs {
         );
         assert!(app.repos.is_empty(), "the repository survived removal");
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -381,7 +381,7 @@ mod jobs {
             "the interface was left showing progress after a failure"
         );
 
-        std::fs::remove_dir_all(&dir)?;
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }

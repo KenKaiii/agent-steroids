@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(loaded.decay_months, 6);
         assert!(loaded.auto_discover);
 
-        std::fs::remove_dir_all(&directory)?;
+        let _ = std::fs::remove_dir_all(&directory);
         Ok(())
     }
 
