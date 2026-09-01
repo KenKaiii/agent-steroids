@@ -69,6 +69,9 @@ echo "=== a real repository, end to end ==="
 ok "add"                       0 "files kept"    -- "$BIN" add antirez/smallchat
 ok "index"                     0 "documents"     -- "$BIN" index
 ok "repos lists it"            0 "smallchat"     -- "$BIN" repos
+# The dominant language is stored rather than derived, so a listing after an
+# ingest must still show it: a stale or empty column is silent.
+ok "repos shows the language"  0 "c "            -- "$BIN" repos
 ok "repos --json"              0 '"repo"'        -- "$BIN" repos --json
 ok "files"                     0 "chat"          -- "$BIN" files antirez/smallchat
 ok "search finds code"         0 "match"         -- "$BIN" search "int main" --limit 2

@@ -243,6 +243,9 @@ fn build_from(
         params![total.to_string().into_bytes()],
     )?;
     transaction.commit()?;
+    // The listing reads this rather than deriving it, and an index run is the
+    // natural point to refresh it: the documents have just been read anyway.
+    store.refresh_languages()?;
     store.invalidate_caches();
 
     let total = total as usize;
