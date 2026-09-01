@@ -409,10 +409,10 @@ impl Store {
                 )
                 .ok();
             self.stop_trigrams = Some(blob.map(|bytes| {
-                bytes
-                    .chunks_exact(3)
-                    .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                    .collect()
+                // as_chunks yields fixed-size arrays directly, so no
+                // per-element rebuild is needed.
+                let (grams, _remainder) = bytes.as_chunks::<3>();
+                grams.iter().copied().collect()
             }));
         }
         self.stop_trigrams.as_ref().and_then(|inner| inner.as_ref())
