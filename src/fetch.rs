@@ -193,8 +193,22 @@ fn agent() -> &'static ureq::Agent {
 }
 
 fn get(url: &str, accept: &str) -> Result<ureq::http::Response<ureq::Body>> {
+    get_within(url, accept, None)
+}
+
+/// `deadline` bounds the whole exchange, body included. Used where a stalled
+/// network must not hold up an unrelated command, such as the once-a-day
+/// release check.
+fn get_within(
+    url: &str,
+    accept: &str,
+    deadline: Option<Duration>,
+) -> Result<ureq::http::Response<ureq::Body>> {
     let mut request = agent()
         .get(url)
+        .config()
+        .timeout_global(deadline)
+        .build()
         .header("User-Agent", USER_AGENT)
         .header("Accept", accept);
     if let Ok(token) = std::env::var("GITHUB_TOKEN")
@@ -255,9 +269,26 @@ pub fn get_text(url: &str, accept: &str) -> Result<String> {
 
 /// Fetch a JSON endpoint as text, with the shared auth and user-agent headers.
 pub fn get_json(url: &str) -> Result<String> {
-    Ok(get(url, "application/vnd.github+json")?
+    get_json_within(url, None)
+}
+
+/// `get_json` with a hard deadline on the whole exchange.
+pub fn get_json_within(url: &str, deadline: Option<Duration>) -> Result<String> {
+    Ok(get_within(url, "application/vnd.github+json", deadline)?
         .body_mut()
         .read_to_string()?)
+}
+
+/// Fetch a binary endpoint into memory, refusing anything over `limit`.
+///
+/// The cap is what keeps a hostile or broken server from filling RAM: the
+/// caller knows how large the thing it asked for can legitimately be.
+pub fn get_bytes(url: &str, limit: u64) -> Result<Vec<u8>> {
+    Ok(get(url, "application/octet-stream")?
+        .body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()?)
 }
 
 /// The commit a repository's HEAD points at, and its default branch.

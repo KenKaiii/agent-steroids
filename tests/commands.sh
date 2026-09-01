@@ -11,6 +11,8 @@ set -uo pipefail
 BIN="${BIN:-steroids}"
 ROOT="$(mktemp -d)"
 export STEROIDS_ROOT="$ROOT"
+# The suite must never reach for a release: no nudge, no binary swap.
+export STEROIDS_NO_UPGRADE=1
 PASS=0
 FAIL=0
 
@@ -45,6 +47,7 @@ ok "define on empty"       0 "empty"              -- "$BIN" define Thing
 ok "recent on empty"       0 "no repositories"    -- "$BIN" recent --hours 24
 ok "index on empty"        0 "documents"          -- "$BIN" index
 ok "compact on empty"      0 "reclaimed"          -- "$BIN" compact
+ok "upgrade check offline" 0 "skipped"            -- "$BIN" upgrade --check
 ok "decay off by default"  0 "archived"           -- "$BIN" decay
 ok "files, unknown repo"   1 "no files"           -- "$BIN" files ghost/repo
 ok "show, unknown repo"    1 "not in corpus"      -- "$BIN" show ghost/repo a.py

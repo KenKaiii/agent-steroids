@@ -17,6 +17,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The smoke path runs real commands; none of them may reach for a release.
+  STEROIDS_NO_UPGRADE: 1
 
 jobs:
   # Linux, macOS and Windows all differ in ways this tool cares about: file

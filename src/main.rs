@@ -14,6 +14,7 @@ mod render;
 mod search;
 mod store;
 mod tui;
+mod upgrade;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -227,6 +228,12 @@ enum Command {
     Compact,
     /// Disk usage report
     Stats,
+    /// Replace this binary with the latest release. Also runs at the end of `update`.
+    Upgrade {
+        /// Report whether a newer release exists without installing it
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 /// Where the corpus lives.
@@ -341,10 +348,17 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let parallel = cli.parallel;
     let root = corpus_root(cli.root);
+    upgrade::cleanup_old();
 
     let Some(command) = cli.command else {
         return tui::run(root.clone(), Store::open(&root)?);
     };
+    // Before the corpus is opened: a corpus stamped by a newer binary refuses
+    // to open, and this is the command that resolves that.
+    if let Command::Upgrade { check } = command {
+        report_upgrade(upgrade::upgrade(&root, check)?);
+        return Ok(());
+    }
 
     // Commands that write must hold the corpus lock for their whole run, so a
     // second ingest waits instead of corrupting the shared dictionary.
@@ -463,6 +477,16 @@ fn main() -> Result<()> {
                 eprintln!("  reclaimed {}", human(reclaimed as f64));
             }
             run_index(&mut store, false)?;
+
+            // Last, so this process finishes on the binary it started with.
+            // A failed upgrade is reported, not fatal: the corpus is fresh.
+            if settings.auto_upgrade {
+                match upgrade::upgrade(&root, false) {
+                    Ok(outcome) => report_upgrade(outcome),
+                    Err(error) => eprintln!("  upgrade skipped: {error:#}"),
+                }
+            }
+            return Ok(());
         }
 
         Command::Index { rebuild } => run_index(&mut store, rebuild)?,
@@ -1144,8 +1168,31 @@ fn main() -> Result<()> {
                 println!("  ratio        : {:.2}x of raw source", total / raw as f64);
             }
         }
+
+        Command::Upgrade { .. } => unreachable!("handled before the corpus is opened"),
+    }
+    // Every other command mentions a newer release once a day, on stderr so
+    // --json output stays parseable.
+    if config::Config::load(&store)?.auto_upgrade {
+        upgrade::nudge(&root);
     }
     Ok(())
+}
+
+/// Stderr only: stdout belongs to the command that ran.
+fn report_upgrade(outcome: upgrade::Outcome) {
+    use upgrade::Outcome;
+    match outcome {
+        Outcome::UpToDate => eprintln!(
+            "  steroids {} is the latest release",
+            env!("CARGO_PKG_VERSION")
+        ),
+        Outcome::Available(version) => {
+            eprintln!("  new version {version} available: steroids upgrade")
+        }
+        Outcome::Upgraded { from, to } => eprintln!("  steroids {from} → {to}"),
+        Outcome::Skipped(reason) => eprintln!("  upgrade skipped: {reason}"),
+    }
 }
 
 /// Fetch many repositories at once, reporting failures without aborting.

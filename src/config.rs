@@ -27,6 +27,9 @@ pub struct Config {
     /// Skip repositories with no upstream commit in this many months. Zero
     /// accepts any age.
     pub max_age_months: u32,
+    /// Replace the binary with the latest release at the end of `update`, and
+    /// mention a newer release once a day after other commands.
+    pub auto_upgrade: bool,
 }
 
 impl Default for Config {
@@ -49,6 +52,7 @@ impl Default for Config {
             // Two years. Old enough to keep stable, finished libraries;
             // recent enough to exclude code that predates current practice.
             max_age_months: 24,
+            auto_upgrade: true,
         }
     }
 }
@@ -73,6 +77,10 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "max_age_months",
         "ignore repos with no commit in N months (0 = any age)",
+    ),
+    (
+        "auto_upgrade",
+        "replace the binary with new releases during update (true/false)",
     ),
 ];
 
@@ -118,6 +126,7 @@ impl Config {
             "discover_limit" => self.discover_limit.to_string(),
             "min_stars" => self.min_stars.to_string(),
             "max_age_months" => self.max_age_months.to_string(),
+            "auto_upgrade" => self.auto_upgrade.to_string(),
             _ => String::new(),
         }
     }
@@ -145,6 +154,7 @@ impl Config {
             }
             "min_stars" => self.min_stars = parse_number(value, "min_stars")? as u32,
             "max_age_months" => self.max_age_months = parse_number(value, "max_age_months")? as u32,
+            "auto_upgrade" => self.auto_upgrade = parse_bool(value, "auto_upgrade")?,
             other => bail!(
                 "unknown setting {other:?}. Known: {}",
                 KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")

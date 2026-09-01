@@ -77,7 +77,7 @@ Needs [Rust](https://rustup.rs). Then:
 cargo install --git https://github.com/KenKaiii/agent-steroids
 ```
 
-Done. You now have a `steroids` command.
+Done. You now have a `steroids` command. It updates itself: `steroids update` also installs the latest release, and other commands mention one once a day. `steroids config auto_upgrade false` to opt out.
 
 ## 🤖 Then let your agent do the rest
 
@@ -147,6 +147,7 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 | `steroids tag --add rust,cli <repo>` | Label repos so your agent can search just a slice |
 | `steroids decay` | Auto-drop repos that went quiet. Dry run first |
 | `steroids stats` | What it's costing you in disk |
+| `steroids upgrade` | Install the latest release. `--check` only tells you if there is one |
 
 Point it at a USB drive and carry the whole thing between machines:
 
@@ -170,6 +171,7 @@ steroids config min_stars 500    # change one
 | `discover_query` | `topic:ai-agents` | What to look for when discovering |
 | `discover_limit` | `25` | Cap on how many one discovery run adds |
 | `min_stars` | `500` | Skip anything below this |
+| `auto_upgrade` | `true` | Replace the binary with new releases during `update` |
 | `max_age_months` | `24` | Skip repos with no commits in N months. 0 accepts any age |
 
 Decay measures from the repo's **last commit**, not when you added it. A library first published in 2011 but committed to yesterday counts as fresh. Archived repos are dropped whatever their age, since an archive never gets another fix.

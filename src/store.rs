@@ -28,6 +28,10 @@ const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
 const DICT_SIZE_BYTES: usize = 110 * 1024;
 /// Below this, zstd cannot derive a useful dictionary and fails.
 const MIN_DICT_SAMPLES: usize = 8;
+/// On-disk format generation, stamped into `meta.schema_version` by every
+/// writer. Bump it with any change an older binary could misread, and add
+/// the upgrade in `open_inner` where the stored version is compared.
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// Note on `postings.doc_count`: it records how many documents a posting list
 /// holds, so a query can order its intersections without decompressing
@@ -193,6 +197,34 @@ impl Store {
             {
                 return Err(error.into());
             }
+        }
+        // A corpus stamped by a newer binary is refused outright rather than
+        // half-read: the self-updater's `.old` rollback and a second machine
+        // on an older install both land here. Absent means pre-versioning,
+        // which is format 1.
+        let stored: u32 = db
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok()?.trim().parse().ok())
+            .unwrap_or(1);
+        if stored > SCHEMA_VERSION {
+            bail!(
+                "{} was written by a newer steroids (format {stored}, this binary reads {SCHEMA_VERSION}); \
+                 run: steroids upgrade",
+                root.display()
+            );
+        }
+        // Migrations for `stored < SCHEMA_VERSION` go here, before the stamp,
+        // and only under the write lock so two processes never race one.
+        if for_write && writable {
+            db.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
+                params![SCHEMA_VERSION.to_string().into_bytes()],
+            )?;
         }
         // Durability matters more than ingest speed here, but the default
         // rollback journal is slow for the many small writes an ingest makes.
@@ -1501,6 +1533,38 @@ mod tests {
         for id in &more {
             assert!(store.read_document(*id)?.starts_with(b"def hello"));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// An older binary must refuse a corpus a newer one has stamped, for both
+    /// readers and writers: half-reading a format it does not know is how a
+    /// rollback corrupts data silently.
+    #[test]
+    fn refuses_a_corpus_from_a_newer_binary() -> Result<()> {
+        let dir = crate::store::scratch_dir("schema");
+        let store = Store::open_for_write(&dir)?;
+        let stamped: Vec<u8> = store.db.query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stamped, SCHEMA_VERSION.to_string().into_bytes());
+
+        store.db.execute(
+            "UPDATE meta SET value = ?1 WHERE key='schema_version'",
+            params![(SCHEMA_VERSION + 1).to_string().into_bytes()],
+        )?;
+        drop(store);
+
+        let refused = Store::open(&dir).err().map(|e| e.to_string());
+        assert!(
+            refused
+                .as_deref()
+                .is_some_and(|m| m.contains("steroids upgrade")),
+            "reader accepted a newer corpus: {refused:?}"
+        );
+        assert!(Store::open_for_write(&dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

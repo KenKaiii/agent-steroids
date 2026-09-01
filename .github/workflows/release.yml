@@ -1,0 +1,87 @@
+name: Release
+
+# Push a tag `vX.Y.Z` after bumping Cargo.toml. The binary's own updater
+# fetches what this publishes, so an asset name here is an API: it must equal
+# `steroids-<target>.tar.gz` for every target in src/upgrade.rs.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A release that failed its own tests would be installed on every machine
+  # that runs `steroids update` the next day. Build nothing until this passes.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag matches Cargo.toml
+        run: |
+          crate="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          [ "$crate" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} but Cargo.toml says $crate"; exit 1; }
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: BIN=./target/release/steroids bash tests/commands.sh
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Static musl on Linux: one binary runs on any distro.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          # Linked on macOS itself so the ad-hoc signature is present.
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl C toolchain (bundled sqlite and zstd)
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      # One format on every platform: the updater extracts tar.gz alone.
+      - name: Package
+        shell: bash
+        run: |
+          bin=steroids${{ runner.os == 'Windows' && '.exe' || '' }}
+          tar -C "target/${{ matrix.target }}/release" -czf "steroids-${{ matrix.target }}.tar.gz" "$bin"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: steroids-${{ matrix.target }}
+          path: steroids-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The only job that can write to the repository, and only to releases.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: cd assets && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --generate-notes assets/*
