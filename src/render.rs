@@ -54,6 +54,19 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
 }
 
+/// Rough token count for a block of code.
+///
+/// Code tokenises at roughly one token per four characters, denser than prose
+/// because of punctuation and symbols. Taking the larger of the two estimates
+/// keeps prose-heavy and symbol-heavy text both from slipping under a budget,
+/// which is the failure that makes a cap useless: an answer reported as fitting
+/// and then blowing the caller's context anyway.
+pub fn estimate_tokens(text: &str) -> usize {
+    let words = text.split_whitespace().count() * 13 / 10;
+    let chars = text.chars().count() / 4;
+    words.max(chars)
+}
+
 /// Longest context line shown. Generated or data-heavy source can hold a
 /// single line of hundreds of kilobytes, and one such match would otherwise
 /// fill a reader's whole context with something they cannot use.
@@ -85,6 +98,35 @@ fn is_stale(pushed_at: &str) -> bool {
         .unwrap_or(0);
     let cutoff = crate::discover::iso_date(now.saturating_sub(STALE_AFTER_DAYS * 86_400));
     &pushed_at[..10] < cutoff.as_str()
+}
+
+/// Render results, stopping once `budget` tokens are spent.
+///
+/// A caller with a context window cares about tokens, not result count: twenty
+/// one-line matches and twenty matches inside deeply nested code differ by an
+/// order of magnitude. Truncating on a real measurement, and saying so, beats
+/// returning whatever a fixed limit happens to produce.
+pub fn render_matches_within(matches: &[Match], header: &str, budget: usize) -> String {
+    // Grow the output result by result, so the cut lands on a whole match
+    // rather than mid-snippet.
+    let mut shown = 0usize;
+    let mut out = String::new();
+    for take in 1..=matches.len() {
+        let candidate = render_matches(&matches[..take], header);
+        if estimate_tokens(&candidate) > budget && take > 1 {
+            break;
+        }
+        out = candidate;
+        shown = take;
+    }
+    if shown < matches.len() {
+        out.push_str(&format!(
+            "\n[{} more match(es) omitted to stay within {budget} tokens; \
+             raise --max-tokens or narrow the search]\n",
+            matches.len() - shown
+        ));
+    }
+    out
 }
 
 pub fn render_matches(matches: &[Match], header: &str) -> String {
@@ -201,6 +243,72 @@ pub fn render_empty(facts: &Facts) -> String {
             "No matches. {scope} The pattern has no literal run of 3+ characters to search \
              on; add one, e.g. a function or parameter name."
         ),
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use crate::search::Match;
+
+    fn sample(n: usize) -> Vec<Match> {
+        (0..n)
+            .map(|i| Match {
+                repo: format!("org/repo{i}"),
+                path: format!("src/file{i}.rs"),
+                line_number: 10,
+                context: (0..11)
+                    .map(|l| format!("    let value_{l} = compute_something({l});"))
+                    .collect(),
+                scope: "fn handler()".into(),
+                commit_sha: String::new(),
+                context_first_line: 5,
+                pushed_at: String::new(),
+            })
+            .collect()
+    }
+
+    /// A caller with a context window cares about tokens, not result count.
+    /// The budget must actually hold, and the caller must be told what was cut
+    /// rather than silently receiving less.
+    #[test]
+    fn budget_is_respected_and_reported() {
+        let matches = sample(30);
+        for budget in [200usize, 800, 2000] {
+            let out = super::render_matches_within(&matches, "30 match(es)", budget);
+            let used = super::estimate_tokens(&out);
+            assert!(
+                used <= budget + super::estimate_tokens("[30 more match(es) omitted]") + 40,
+                "budget {budget} produced {used} tokens"
+            );
+            assert!(
+                out.contains("omitted"),
+                "budget {budget} cut without saying so"
+            );
+        }
+    }
+
+    /// A budget large enough for everything must not truncate or add a notice.
+    #[test]
+    fn a_generous_budget_shows_everything() {
+        let matches = sample(5);
+        let out = super::render_matches_within(&matches, "5 match(es)", 100_000);
+        assert!(!out.contains("omitted"));
+        for i in 0..5 {
+            assert!(out.contains(&format!("org/repo{i}")), "lost result {i}");
+        }
+    }
+
+    /// Code is denser than prose, and a word-based estimate undercounts it by
+    /// several times, which silently blows every budget built on it.
+    #[test]
+    fn estimate_does_not_undercount_dense_code() {
+        let dense = "a=b(c,d);e=f[g]+h.i(j,k);".repeat(40);
+        let estimated = super::estimate_tokens(&dense);
+        assert!(
+            estimated >= dense.len() / 5,
+            "estimated {estimated} tokens for {} characters of dense code",
+            dense.len()
+        );
     }
 }
 

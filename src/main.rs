@@ -95,6 +95,10 @@ enum Command {
         /// times.
         #[arg(long)]
         per_repo: Option<usize>,
+        /// Stop adding results once the output would exceed this many tokens.
+        /// A caller with a context window cares about tokens, not matches.
+        #[arg(long, default_value_t = 6000)]
+        max_tokens: usize,
         #[arg(long, default_value_t = 20)]
         limit: usize,
         /// Emit JSON instead of text
@@ -115,8 +119,22 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print a full source file from the corpus
-    Show { repo: String, path: String },
+    /// Print a source file from the corpus
+    Show {
+        repo: String,
+        path: String,
+        /// First line to print, 1-based. Search results carry the line number,
+        /// so an agent can read around a match without pulling the whole file.
+        #[arg(long)]
+        from: Option<usize>,
+        /// Last line to print. Defaults to `from` plus 120.
+        #[arg(long)]
+        to: Option<usize>,
+        /// Print at most this many lines. A large file otherwise costs tens of
+        /// thousands of tokens to read.
+        #[arg(long, default_value_t = 400)]
+        limit: usize,
+    },
     /// List the files indexed for one repository
     Files {
         repo: String,
@@ -418,6 +436,7 @@ fn main() -> Result<()> {
             include_comments,
             context,
             per_repo,
+            max_tokens,
             limit,
             json,
         } => {
@@ -502,7 +521,7 @@ fn main() -> Result<()> {
             } else {
                 print!(
                     "{}",
-                    render_matches(
+                    render::render_matches_within(
                         &matches,
                         &format!(
                             "{} match(es) for /{pattern}/{}",
@@ -512,7 +531,8 @@ fn main() -> Result<()> {
                             } else {
                                 ""
                             }
-                        )
+                        ),
+                        max_tokens,
                     )
                 );
             }
@@ -567,10 +587,48 @@ fn main() -> Result<()> {
             }
         }
 
-        Command::Show { repo, path } => match store.read_path(&repo, &path)? {
+        Command::Show {
+            repo,
+            path,
+            from,
+            to,
+            limit,
+        } => match store.read_path(&repo, &path)? {
             Some(content) => {
-                println!("# {repo}/{path}\n");
-                print!("{}", String::from_utf8_lossy(&content));
+                let text = String::from_utf8_lossy(&content);
+                let lines: Vec<&str> = text.lines().collect();
+                let start = from.unwrap_or(1).max(1);
+                // A range around a known line is the common case, so default
+                // to a window rather than the rest of the file.
+                let end = to
+                    .unwrap_or(if from.is_some() {
+                        start + 120
+                    } else {
+                        usize::MAX
+                    })
+                    .min(lines.len())
+                    .min(start + limit - 1);
+
+                println!("# {repo}/{path}");
+                if start > lines.len() {
+                    println!("\nFile has {} lines; nothing at line {start}.", lines.len());
+                    return Ok(());
+                }
+                println!(
+                    "# lines {start}-{end} of {}{}\n",
+                    lines.len(),
+                    if end < lines.len() {
+                        "  (use --from/--to for the rest)"
+                    } else {
+                        ""
+                    }
+                );
+                // Numbered, so a line an agent reads here matches the number a
+                // search result gave it.
+                let width = end.to_string().len();
+                for (offset, line) in lines[start - 1..end].iter().enumerate() {
+                    println!("{:>width$} \u{2502} {line}", start + offset);
+                }
             }
             None => {
                 println!("Not in corpus: {repo}/{path}");

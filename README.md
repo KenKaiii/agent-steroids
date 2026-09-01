@@ -104,7 +104,7 @@ same problem.
 
   steroids search '<regex>' [--tag T] [--repo R] [--language L] [--limit N]
   steroids define <Symbol>       where something is defined
-  steroids show <repo> <path>    read a full file
+  steroids show <repo> <path> [--from N --to N]   read a file, or one region
   steroids repos                 what is indexed
   steroids recent --tag X        what changed upstream in the last 72 hours
 

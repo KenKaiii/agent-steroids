@@ -81,6 +81,9 @@ ok "search --include-comments" 0 ""              -- "$BIN" search "the" --includ
 ok "search -C wide context"    0 "match"         -- "$BIN" search "int main" -C 10 --limit 1
 ok "search -C 0"               0 "match"         -- "$BIN" search "int main" -C 0 --limit 1
 ok "search --per-repo"         0 "match"         -- "$BIN" search "int" --per-repo 1 --limit 3
+ok "search --max-tokens"       0 "match"         -- "$BIN" search "int" --max-tokens 500 --limit 20
+ok "show --from/--to"          0 "lines"         -- "$BIN" show antirez/smallchat smallchat-server.c --from 10 --to 20
+ok "show past end of file"     0 "nothing at"    -- "$BIN" show antirez/smallchat smallchat-server.c --from 999999
 ok "define"                    0 ""              -- "$BIN" define main --limit 1
 ok "define --json"             0 ""              -- "$BIN" define main --json --limit 1
 ok "show"                      0 "smallchat"     -- "$BIN" show antirez/smallchat smallchat-server.c
