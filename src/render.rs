@@ -14,6 +14,9 @@ pub fn render_matches_json(matches: &[Match], pattern: &str) -> String {
                 "repo": item.repo,
                 "path": item.path,
                 "line": item.line_number,
+                // Where `context` starts, so a caller can number the lines it
+                // was handed instead of guessing the context width.
+                "context_first_line": item.context_start(),
                 "url": item.permalink(),
                 "scope": item.scope,
                 "context": item.context,

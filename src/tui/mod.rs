@@ -281,6 +281,112 @@ mod edge_cases {
 }
 
 #[cfg(test)]
+mod jobs {
+    use super::app::App;
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// The background jobs behind the interactive keys are the only paths that
+    /// write to a corpus without going through the CLI, and nothing else
+    /// exercises them. A failure here means `a`, `d` and `u` are broken in the
+    /// interface while every command line test still passes.
+    #[test]
+    fn add_then_remove_through_the_job_queue() -> Result<()> {
+        if std::env::var("STEROIDS_NETWORK_TESTS").is_err() {
+            println!("SKIP: set STEROIDS_NETWORK_TESTS=1 (needs GitHub)");
+            return Ok(());
+        }
+        let dir = std::env::temp_dir().join(format!("steroids-jobs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
+
+        // Drain until the worker reports it has finished, or give up.
+        let settle = |app: &mut App| -> Result<String> {
+            let deadline = Instant::now() + Duration::from_secs(240);
+            let mut last = String::new();
+            while Instant::now() < deadline {
+                app.poll_jobs()?;
+                if let super::app::Modal::Working(text) = &app.modal {
+                    last = text.clone();
+                } else if !app.status.is_empty() {
+                    return Ok(app.status.clone());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            anyhow::bail!("job never finished, last progress: {last}")
+        };
+
+        super::job::add_repos(
+            dir.clone(),
+            vec!["antirez/smallchat".into()],
+            app.tx.clone(),
+        );
+        let status = settle(&mut app)?;
+        assert!(
+            status.contains("added"),
+            "add reported {status:?} instead of success"
+        );
+        assert_eq!(app.repos.len(), 1, "the repository is not in the list");
+        assert!(app.repos[0].files > 0, "the repository has no files");
+
+        // The corpus must be genuinely searchable, not merely present.
+        let hits =
+            crate::search::search(&mut app.store, "int main", &crate::search::Query::new(3))?;
+        assert!(!hits.matches.is_empty(), "nothing searchable after add");
+
+        app.status.clear();
+        super::job::remove_repo(dir.clone(), "antirez/smallchat".into(), app.tx.clone());
+        let status = settle(&mut app)?;
+        assert!(
+            status.contains("removed"),
+            "remove reported {status:?} instead of success"
+        );
+        assert!(app.repos.is_empty(), "the repository survived removal");
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A name that cannot be fetched must surface as a failure the user can
+    /// see, not leave the interface stuck showing progress forever.
+    #[test]
+    fn a_failing_add_reports_rather_than_hanging() -> Result<()> {
+        if std::env::var("STEROIDS_NETWORK_TESTS").is_err() {
+            println!("SKIP: set STEROIDS_NETWORK_TESTS=1 (needs GitHub)");
+            return Ok(());
+        }
+        let dir = std::env::temp_dir().join(format!("steroids-jobfail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
+
+        super::job::add_repos(
+            dir.clone(),
+            vec!["definitely-not-a-real-org-xyz/nope".into()],
+            app.tx.clone(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline && app.status.is_empty() {
+            app.poll_jobs()?;
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            app.status.contains("failed"),
+            "a bad repository reported {:?}",
+            app.status
+        );
+        assert!(
+            !matches!(app.modal, super::app::Modal::Working(_)),
+            "the interface was left showing progress after a failure"
+        );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod interaction {
     use super::app::{App, Screen};
     use super::*;

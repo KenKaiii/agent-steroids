@@ -642,8 +642,13 @@ fn main() -> Result<()> {
                 println!("No files indexed for {repo}. Check `steroids repos`.");
                 std::process::exit(1);
             }
+            // Pad to the longest path actually present rather than a fixed
+            // width: a listing of several hundred short paths otherwise spends
+            // most of its bytes on spaces, and a caller reading this is
+            // usually a program.
+            let width = paths.iter().map(|(p, ..)| p.len()).max().unwrap_or(0).min(90);
             for (path, language, size) in &paths {
-                println!("  {path:<70} {language:<12} {}", human(*size as f64));
+                println!("  {path:<width$}  {language:<10} {}", human(*size as f64));
             }
             println!("\n  {} files shown for {repo}", paths.len());
         }
@@ -873,6 +878,20 @@ fn main() -> Result<()> {
             limit,
             json,
         } => {
+            // A repository not in the corpus has no commits to report, and
+            // saying "no commits" invites the caller to conclude the project
+            // is quiet rather than absent.
+            if let Some(one) = &repo {
+                let name = fetch::normalize_repo(one)?;
+                if !store.list_repos()?.iter().any(|r| r.name == name) {
+                    println!(
+                        "'{name}' is not in this corpus. Index it first with \
+                         `steroids add {name}`, or drop --repo to check everything \
+                         that is."
+                    );
+                    return Ok(());
+                }
+            }
             let repos: Vec<String> = match &repo {
                 Some(one) => vec![fetch::normalize_repo(one)?],
                 None => store

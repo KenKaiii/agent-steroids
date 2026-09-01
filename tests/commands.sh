@@ -84,6 +84,8 @@ ok "search --per-repo"         0 "match"         -- "$BIN" search "int" --per-re
 ok "search --max-tokens"       0 "match"         -- "$BIN" search "int" --max-tokens 500 --limit 20
 ok "show --from/--to"          0 "lines"         -- "$BIN" show antirez/smallchat smallchat-server.c --from 10 --to 20
 ok "show past end of file"     0 "nothing at"    -- "$BIN" show antirez/smallchat smallchat-server.c --from 999999
+ok "recent, repo not indexed"  0 "not in this corpus" -- "$BIN" recent --repo ghost/x --hours 24
+ok "search json has line map"  0 "context_first_line" -- "$BIN" search "int main" --json --limit 1
 ok "define"                    0 ""              -- "$BIN" define main --limit 1
 ok "define --json"             0 ""              -- "$BIN" define main --json --limit 1
 ok "show"                      0 "smallchat"     -- "$BIN" show antirez/smallchat smallchat-server.c
