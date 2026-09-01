@@ -163,7 +163,12 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
         let date = if stale {
             items
                 .first()
-                .map(|i| format!("  (last commit {})", &i.pushed_at[..10.min(i.pushed_at.len())]))
+                .map(|i| {
+                    format!(
+                        "  (last commit {})",
+                        &i.pushed_at[..10.min(i.pushed_at.len())]
+                    )
+                })
                 .unwrap_or_default()
         } else {
             String::new()
