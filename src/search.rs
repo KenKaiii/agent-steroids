@@ -794,10 +794,6 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         }
     }
 
-    let mut queues: Vec<std::vec::IntoIter<Match>> = order
-        .into_iter()
-        .filter_map(|repo| by_repo.remove(&repo).map(|v| v.into_iter()))
-        .collect();
     // Rank each repository's hits before interleaving, so the strongest match
     // from every project is what fills the page. Weights follow the same idea
     // as zoekt's: a definition beats a whole-word use, which beats an
@@ -806,6 +802,24 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     for queue in by_repo.values_mut() {
         queue.sort_by_key(|item| std::cmp::Reverse(relevance(item)));
     }
+    // Then order the repositories themselves by their best match, so the
+    // strongest hit in the corpus leads. Without this the first result is
+    // whichever repository the scan happened to reach first, which put an
+    // import above a struct definition in another project.
+    order.sort_by_key(|repo| {
+        std::cmp::Reverse(
+            by_repo
+                .get(repo)
+                .and_then(|hits| hits.first())
+                .map(relevance)
+                .unwrap_or(0),
+        )
+    });
+
+    let mut queues: Vec<std::vec::IntoIter<Match>> = order
+        .into_iter()
+        .filter_map(|repo| by_repo.remove(&repo).map(|v| v.into_iter()))
+        .collect();
 
     let mut results = Vec::new();
     let gathered: usize = queues.iter().map(|q| q.len()).sum();
