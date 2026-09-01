@@ -180,7 +180,18 @@ fn build_from(
         [],
         |row| row.get(0),
     )?;
-    let cutoff = ((total as f64 * MAX_DOCUMENT_FRACTION) as usize).max(1);
+    // Measured against every id a list can hold, not just the live ones. An
+    // incremental run merges into lists that still carry the ids of replaced
+    // documents, and judging those lists against the live count alone marked
+    // 271 trigrams too common after one update that replaced 28% of the
+    // corpus. Those lists were deleted, and the stop list only accumulates,
+    // so the loss of selectivity lasted until the next full rebuild.
+    let dead = if full {
+        0
+    } else {
+        count_stale(store, after, stale_before)?
+    };
+    let cutoff = (((total + dead) as f64 * MAX_DOCUMENT_FRACTION) as usize).max(1);
 
     // Trigrams already dropped for being too common stay dropped: re-adding
     // them from a small batch would claim a term is rare when the corpus knows
@@ -243,7 +254,7 @@ fn build_from(
         params![if full {
             b"0".to_vec()
         } else {
-            count_stale(store, after, stale_before)?
+            dead.to_string().into_bytes()
         }],
     )?;
     transaction.execute(
@@ -364,7 +375,8 @@ fn read_stop_trigrams(store: &Store) -> Result<std::collections::HashSet<[u8; 3]
 /// Derived by comparing how many documents were live at the last index against
 /// how many of those still are. Document ids are not dense, so the id itself
 /// says nothing about how many exist.
-fn count_stale(store: &Store, indexed_upto: i64, previous_stale: i64) -> Result<Vec<u8>> {
+/// Ids in the postings that no longer name a live document.
+fn count_stale(store: &Store, indexed_upto: i64, previous_stale: i64) -> Result<i64> {
     let indexed_then = read_marker(store, "doc_count")?;
     let survivors: i64 = store.db.query_row(
         "SELECT COUNT(*) FROM documents WHERE offset >= 0 AND id <= ?1",
@@ -372,7 +384,7 @@ fn count_stale(store: &Store, indexed_upto: i64, previous_stale: i64) -> Result<
         |row| row.get(0),
     )?;
     let newly_stale = (indexed_then - survivors).max(0);
-    Ok((previous_stale + newly_stale).to_string().into_bytes())
+    Ok(previous_stale + newly_stale)
 }
 
 #[cfg(test)]

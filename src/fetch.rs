@@ -111,7 +111,8 @@ pub fn normalize_repo(input: &str) -> Result<String> {
     // Anything deeper is only meaningful as a browser URL (tree, blob, pull),
     // and those come with a host. A bare `a/b/c` is a typo, and the 404 it
     // would otherwise earn from the network blames the wrong thing.
-    let bare = !input.contains("://") && !input.contains("github.com") && !input.contains("gitee.com");
+    let bare =
+        !input.contains("://") && !input.contains("github.com") && !input.contains("gitee.com");
     if bare && parts.next().is_some() {
         bail!("not a valid repository reference: {input:?} (expected owner/name)");
     }

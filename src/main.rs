@@ -414,9 +414,14 @@ fn main() -> Result<()> {
             } else {
                 index::build
             };
+            // Carriage-return progress is for a terminal. Captured by an agent
+            // or a log it is hundreds of lines saying nothing.
+            let live = std::io::IsTerminal::is_terminal(&std::io::stderr());
             let stats = builder(&mut store, &mut |done, total| {
-                eprint!("\r  indexing {done}/{total}");
-                let _ = std::io::stderr().flush();
+                if live {
+                    eprint!("\r  indexing {done}/{total}");
+                    let _ = std::io::stderr().flush();
+                }
             })?;
             eprintln!(
                 "\r  {} documents, {} trigrams stored ({} too common)   ",
@@ -1074,8 +1079,10 @@ fn ingest_all(
         &mut |name, result, done, total| match result {
             Ok(prepared) => {
                 if terse {
-                    eprint!("\r  {done}/{total} fetched…        ");
-                    let _ = std::io::stderr().flush();
+                    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+                        eprint!("\r  {done}/{total} fetched…        ");
+                        let _ = std::io::stderr().flush();
+                    }
                 } else {
                     let sha = &prepared.upstream.commit_sha;
                     println!(

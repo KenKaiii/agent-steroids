@@ -1,6 +1,6 @@
 //! Query the corpus: narrow with trigrams, confirm with a real regex.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, anyhow, bail};
 use regex::bytes::RegexBuilder;
@@ -849,44 +849,170 @@ impl std::ops::Deref for SearchResults {
     }
 }
 
-/// Take `budget` candidates round-robin across repositories.
+/// Candidates for a pattern the index could not narrow, spread across
+/// repositories, without visiting the whole corpus.
 ///
-/// Order within a repository is preserved, so the cheapest documents for a
-/// repository are still tried first; only the choice of which repositories get
-/// looked at at all changes.
-fn spread_across_repos<T>(rows: Vec<T>, budget: usize, repo_of: fn(&T) -> &str) -> Vec<T> {
-    if rows.len() <= budget {
-        return rows;
+/// Each repository contributes up to twice its fair share of the budget so
+/// small repositories leave room for large ones, then the shares are
+/// interleaved round-robin and cut at the budget. A repository that had more
+/// than was taken, or a total over the budget, means the answer is capped.
+///
+/// Repository filters apply to the repository list, the rest to each
+/// repository's documents. The language and path filters still walk a
+/// repository's documents until they find enough, so they are the one case
+/// here that grows with the corpus; that is still SQLite reading integers,
+/// not Rust holding strings.
+fn unnarrowed_candidates(
+    store: &Store,
+    query: &Query,
+    binds: &[String],
+) -> Result<(Vec<i64>, bool)> {
+    let mut repo_sql = String::from("SELECT id FROM repos r WHERE 1");
+    let mut repo_binds: Vec<&String> = Vec::new();
+    let mut doc_sql = String::from("SELECT id FROM documents WHERE repo_id = ?1 AND offset >= 0");
+    let mut doc_binds: Vec<&String> = Vec::new();
+    // Binds were pushed in this order above: repo, tag, language, glob. The
+    // first two belong to repositories, the rest to documents.
+    let mut bind = binds.iter();
+    if query.repo.is_some() {
+        repo_sql.push_str(" AND r.name = ?");
+        repo_binds.push(bind.next().expect("repo bind"));
     }
-    let mut order: Vec<String> = Vec::new();
-    let mut by_repo: HashMap<String, VecDeque<T>> = HashMap::new();
-    for row in rows {
-        let repo = repo_of(&row).to_string();
-        match by_repo.get_mut(&repo) {
-            Some(queue) => queue.push_back(row),
-            None => {
-                order.push(repo.clone());
-                by_repo.insert(repo, VecDeque::from([row]));
-            }
+    if query.tag.is_some() {
+        repo_sql.push_str(" AND ',' || COALESCE(r.tags, '') || ',' LIKE ?");
+        repo_binds.push(bind.next().expect("tag bind"));
+    }
+    if query.language.is_some() {
+        doc_sql.push_str(&format!(" AND language = ?{}", doc_binds.len() + 2));
+        doc_binds.push(bind.next().expect("language bind"));
+    }
+    if query.path_glob.is_some_and(|glob| !glob.contains('[')) {
+        doc_sql.push_str(&format!(" AND path GLOB ?{}", doc_binds.len() + 2));
+        doc_binds.push(bind.next().expect("glob bind"));
+    }
+    let repos: Vec<i64> = store
+        .db
+        .prepare(&repo_sql)?
+        .query_map(rusqlite::params_from_iter(repo_binds.iter()), |row| {
+            row.get(0)
+        })?
+        .collect::<Result<_, _>>()?;
+    if repos.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    let share = (MAX_CANDIDATES / repos.len() + 1) * 2;
+    doc_sql.push_str(&format!(" ORDER BY id LIMIT {}", share + 1));
+
+    let mut statement = store.db.prepare(&doc_sql)?;
+    let mut per_repo: Vec<Vec<i64>> = Vec::with_capacity(repos.len());
+    let mut capped = false;
+    for repo_id in repos {
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&repo_id];
+        params.extend(doc_binds.iter().map(|bind| *bind as &dyn rusqlite::ToSql));
+        let mut ids: Vec<i64> = statement
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        if ids.len() > share {
+            capped = true;
+            ids.truncate(share);
+        }
+        if !ids.is_empty() {
+            per_repo.push(ids);
         }
     }
-    let mut out = Vec::with_capacity(budget);
-    'outer: loop {
+    let shares: Vec<&Vec<i64>> = per_repo.iter().collect();
+    Ok(interleave(&shares, capped))
+}
+
+/// Candidates from a narrowed set too large to inline into SQL.
+///
+/// `filtered_sql` is the inner query with every filter applied but no window;
+/// its rows are read as integers in id order and never collected as a whole.
+fn streamed_candidates(
+    store: &Store,
+    filtered_sql: &str,
+    binds: &[String],
+    ids: &HashSet<i64>,
+) -> Result<(Vec<i64>, bool)> {
+    let mut statement = store
+        .db
+        .prepare(&format!("SELECT id, repo_id FROM ({filtered_sql})"))?;
+    let mut per_repo: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut order: Vec<i64> = Vec::new();
+    let mut capped = false;
+    let mut rows = statement.query(rusqlite::params_from_iter(binds.iter()))?;
+    while let Some(row) = rows.next()? {
+        let (id, repo_id): (i64, i64) = (row.get(0)?, row.get(1)?);
+        if !ids.contains(&id) {
+            continue;
+        }
+        let bucket = per_repo.entry(repo_id).or_insert_with(|| {
+            order.push(repo_id);
+            Vec::new()
+        });
+        // Twice a fair share, like the unnarrowed path: enough that small
+        // repositories leave room for large ones, bounded all the same.
+        if bucket.len() >= MAX_CANDIDATES / order.len().max(1) * 2 + 2 {
+            capped = true;
+            continue;
+        }
+        bucket.push(id);
+    }
+    let shares: Vec<&Vec<i64>> = order.iter().map(|repo| &per_repo[repo]).collect();
+    Ok(interleave(&shares, capped))
+}
+
+/// Round-robin across per-repository shares, cut at the budget.
+fn interleave(shares: &[&Vec<i64>], mut capped: bool) -> (Vec<i64>, bool) {
+    let mut out = Vec::with_capacity(MAX_CANDIDATES);
+    let mut round = 0usize;
+    loop {
         let mut progressed = false;
-        for repo in &order {
-            if let Some(row) = by_repo.get_mut(repo).and_then(VecDeque::pop_front) {
-                out.push(row);
+        for ids in shares {
+            if let Some(id) = ids.get(round) {
+                out.push(*id);
                 progressed = true;
-                if out.len() >= budget {
-                    break 'outer;
+                if out.len() >= MAX_CANDIDATES {
+                    // Whatever is left in the shares was never looked at.
+                    capped |= shares.iter().map(|ids| ids.len()).sum::<usize>() > out.len();
+                    return (out, capped);
                 }
             }
         }
         if !progressed {
-            break;
+            return (out, capped);
         }
+        round += 1;
     }
-    out
+}
+
+/// Repository, path and language for chosen candidates, in the given order.
+fn hydrate_candidates(store: &Store, ids: &[i64]) -> Result<Vec<(i64, String, String, String)>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let list: Vec<String> = ids.iter().map(i64::to_string).collect();
+    let mut statement = store.db.prepare(&format!(
+        "SELECT d.id, r.name, d.path, d.language \
+         FROM documents d JOIN repos r ON r.id = d.repo_id \
+         WHERE d.id IN ({})",
+        list.join(",")
+    ))?;
+    let mut by_id: HashMap<i64, (String, String, String)> = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
+        })?
+        .collect::<Result<_, _>>()?;
+    // Back into candidate order: the spread across repositories is the whole
+    // reason the ids were chosen the way they were.
+    Ok(ids
+        .iter()
+        .filter_map(|id| {
+            by_id
+                .remove(id)
+                .map(|(repo, path, lang)| (*id, repo, path, lang))
+        })
+        .collect())
 }
 
 pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchResults> {
@@ -929,38 +1055,47 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let fold = query.ignore_case || has_inline_case_flag(pattern);
     let narrowed = candidates(store, pattern, fold)?;
 
-    // The trigram index has usually narrowed to a handful of documents, so ask
-    // for those rather than every row in the corpus. Fetching all 638,000 and
-    // filtering in Rust cost 394ms of the 200ms budget on its own: SQLite can
-    // do this against its primary key instead.
-    let narrow_sql = narrowed
-        .as_ref()
-        .filter(|ids| ids.len() <= SQL_ID_LIMIT)
-        .map(|ids| {
-            let mut list = String::with_capacity(ids.len() * 8);
+    // Candidate selection happens in SQL, in two steps, and the shape matters
+    // more than it looks.
+    //
+    // The first query returns ids only, spread round-robin across
+    // repositories by a window function and cut at the candidate budget. It
+    // used to fetch every document row with its repository, path and language
+    // as Rust strings and pick the budget from those: 186MB for an unnarrowed
+    // search over 640,000 documents, which is 20GB at the 50,000 repositories
+    // this is meant to hold. SQLite's sorter spills to disk instead, so the
+    // memory is bounded whatever the corpus size.
+    //
+    // The spread is deliberate. Rows arrive grouped by repository, so taking
+    // the first 20,000 outright filled the budget from whichever repositories
+    // were indexed earliest: `class \w+Error` has 173,000 candidates and
+    // returned hits from 38 of 443 projects while reporting nothing was
+    // missed. Comparing how different projects solve something is the point
+    // of the corpus, so the cap costs depth within a project, never projects.
+    //
+    // The second query fetches the strings for the survivors alone.
+    let mut sql =
+        String::from("SELECT d.id, d.repo_id FROM documents d JOIN repos r ON r.id = d.repo_id");
+    let mut binds: Vec<String> = Vec::new();
+    // Narrowed ids go inline up to the parser's comfort, and into a temp
+    // table beyond it: a join against 173,000 ids measures at 88ms where
+    // fetching everything and filtering in Rust took 279ms.
+    let mut inline_ids: Option<String> = None;
+    match narrowed.as_ref() {
+        None => {}
+        Some(ids) if ids.len() <= SQL_ID_LIMIT => {
             let mut sorted: Vec<i64> = ids.iter().copied().collect();
             sorted.sort_unstable();
-            for (index, id) in sorted.iter().enumerate() {
-                if index > 0 {
-                    list.push(',');
-                }
-                // Values come from the index, not from user input, so they are
-                // integers by construction and safe to inline.
-                list.push_str(&id.to_string());
-            }
-            list
-        });
-
-    let mut sql = String::from(
-        // Only what filtering and grouping need. Pulling the commit sha and
-        // last-commit date for every document costs 400ms across a corpus of
-        // 638,000 rows, and they are wanted for the ten that match.
-        "SELECT d.id, r.name, d.path, d.language \
-         FROM documents d JOIN repos r ON r.id = d.repo_id WHERE d.offset >= 0",
-    );
-    let mut binds: Vec<String> = Vec::new();
-    if let Some(ids) = &narrow_sql {
-        sql.push_str(&format!(" AND d.id IN ({ids})"));
+            let list: Vec<String> = sorted.iter().map(i64::to_string).collect();
+            // Values come from the index, not from user input, so they are
+            // integers by construction and safe to inline.
+            inline_ids = Some(list.join(","));
+        }
+        Some(_) => {}
+    }
+    sql.push_str(" WHERE d.offset >= 0");
+    if let Some(list) = inline_ids {
+        sql.push_str(&format!(" AND d.id IN ({list})"));
     }
     if let Some(repo) = query.repo {
         sql.push_str(" AND r.name = ?");
@@ -979,33 +1114,53 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         sql.push_str(&format!(" AND d.language = ?{}", binds.len() + 1));
         binds.push(language.to_string());
     }
+    // SQLite's GLOB agrees with ours on * and ? but reads [ as a class where
+    // ours reads it literally, so such a glob stays in Rust below. Everything
+    // else is filtered here so it does not eat into the candidate budget.
+    if let Some(glob) = query.path_glob.filter(|glob| !glob.contains('[')) {
+        sql.push_str(&format!(" AND d.path GLOB ?{}", binds.len() + 1));
+        binds.push(glob.to_string());
+    }
+    let (candidate_ids, capped) =
+        if let Some(ids) = narrowed.as_ref().filter(|ids| ids.len() > SQL_ID_LIMIT) {
+            // Too many ids to inline. Stream the corpus as integers and keep only
+            // what is in the set, capped per repository as it goes, so memory is
+            // the budget rather than the corpus. 95ms for `class\s\w+Error` and
+            // its 173,000 candidates, against 170ms fetching every row with its
+            // strings; a temp table joined by the window query was tried in
+            // between and measured 225ms.
+            streamed_candidates(store, &sql, &binds, ids)?
+        } else if narrowed.is_none() {
+            // Nothing narrowed, so every document is a candidate and the window
+            // below would visit all of them to keep twenty thousand: 230ms here
+            // and around half a minute at 50,000 repositories. The repository
+            // index can hand over each repository's first few documents directly,
+            // which is work proportional to the budget rather than the corpus.
+            // 8ms for the same answer.
+            unnarrowed_candidates(store, query, &binds)?
+        } else {
+            let sql = format!(
+                "SELECT id FROM (SELECT id, repo_id, \
+                 ROW_NUMBER() OVER (PARTITION BY repo_id ORDER BY id) AS rn FROM ({sql})) \
+             ORDER BY rn, repo_id LIMIT {}",
+                MAX_CANDIDATES + 1
+            );
+            let mut ids: Vec<i64> = store
+                .db
+                .prepare(&sql)?
+                .query_map(rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            // One past the budget is the cheapest way to learn the budget bit.
+            let capped = ids.len() > MAX_CANDIDATES;
+            ids.truncate(MAX_CANDIDATES);
+            (ids, capped)
+        };
 
-    let mut statement = store.db.prepare(&sql)?;
-    let rows: Vec<(i64, String, String, String)> = statement
-        .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })?
-        .collect::<Result<_, _>>()?;
-    drop(statement);
-
+    let rows = hydrate_candidates(store, &candidate_ids)?;
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _, path, _)| {
-            narrowed.as_ref().is_none_or(|set| set.contains(id))
-                && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
-        })
+        .filter(|(_, _, path, _)| query.path_glob.is_none_or(|glob| glob_matches(glob, path)))
         .collect();
-
-    // Spend the candidate budget across projects, not on the first few.
-    //
-    // Rows arrive grouped by repository, so taking the first 20,000 outright
-    // filled the budget from whichever repositories were indexed earliest:
-    // `class \w+Error` has 173,000 candidates and returned hits from 38 of 443
-    // projects, while reporting nothing was missed. Comparing how different
-    // projects solve something is the point of the corpus, so let the cap cost
-    // depth within a project rather than whole projects.
-    let available = rows.len();
-    let rows = spread_across_repos(rows, MAX_CANDIDATES, |row| row.1.as_str());
 
     // Documents come back grouped by repository, so taking the first N matches
     // would fill the whole budget from one project. The point of the corpus is
@@ -1021,7 +1176,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let mut collected = 0usize;
     // Candidates dropped by the cap are results the caller never saw. Left
     // unreported, a partial answer is indistinguishable from a complete one.
-    let mut truncated = available > rows.len();
+    let mut truncated = capped;
 
     let mut scanned = 0usize;
     // Commit sha and last-commit date, looked up once per repository that
@@ -1436,30 +1591,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn candidate_budget_spans_repositories() {
-        // Rows arrive grouped by repository. Taking the first two outright
-        // would never look past "a", which is what hid 216 projects.
-        let rows = vec![
-            (1, "a".to_string()),
-            (2, "a".to_string()),
-            (3, "a".to_string()),
-            (4, "b".to_string()),
-            (5, "c".to_string()),
-        ];
-        let picked = spread_across_repos(rows, 3, |row| row.1.as_str());
-        let repos: Vec<&str> = picked.iter().map(|row| row.1.as_str()).collect();
-        assert_eq!(repos, vec!["a", "b", "c"]);
-        // Within a repository the original order still holds.
-        assert_eq!(picked[0].0, 1);
-    }
-
-    #[test]
-    fn a_budget_that_fits_changes_nothing() {
-        let rows = vec![(1, "a".to_string()), (2, "b".to_string())];
-        assert_eq!(spread_across_repos(rows, 9, |row| row.1.as_str()).len(), 2);
-    }
-
-    #[test]
     fn case_variants_cover_every_letter_combination() {
         let variants = case_variants(b"a_b").unwrap();
         assert_eq!(variants.len(), 4);
@@ -1476,6 +1607,16 @@ mod tests {
         assert!(case_variants(b"ISO").is_none());
         // A non-ASCII letter changes its bytes when it changes case.
         assert!(case_variants("é_x".as_bytes()[..3].try_into().unwrap()).is_none());
+    }
+
+    #[test]
+    fn interleave_spreads_the_budget_across_repositories() {
+        let a = vec![1, 2, 3];
+        let b = vec![4];
+        let c = vec![5];
+        let (out, capped) = interleave(&[&a, &b, &c], false);
+        assert_eq!(out, vec![1, 4, 5, 2, 3]);
+        assert!(!capped);
     }
 
     #[test]
