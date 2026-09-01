@@ -6,38 +6,53 @@
 use crate::search::{Diagnosis, Facts, Match, SearchResults};
 
 /// Machine-readable results, for callers that parse rather than read.
-pub fn render_matches_json(results: &SearchResults, pattern: &str, unindexed: &[String]) -> String {
-    let matches: &[Match] = results;
-    let items: Vec<serde_json::Value> = matches
-        .iter()
-        .map(|item| {
-            serde_json::json!({
-                "repo": item.repo,
-                "path": item.path,
-                "line": item.line_number,
-                // Where `context` starts, so a caller can number the lines it
-                // was handed instead of guessing the context width.
-                "context_first_line": item.context_start(),
-                "url": item.permalink(),
-                "scope": item.scope,
-                "context": item.context,
+///
+/// The token budget applies here exactly as it does to text. JSON is what an
+/// agent reads, so it is the output most likely to land in a context window;
+/// ripgrep's JSON printer leaves truncation to the consumer, but its consumer
+/// is a program with unbounded memory, not a window that overflows silently.
+pub fn render_matches_json(
+    results: &SearchResults,
+    pattern: &str,
+    unindexed: &[String],
+    budget: usize,
+) -> String {
+    let render = |shown: &[Match]| {
+        let items: Vec<serde_json::Value> = shown
+            .iter()
+            .map(|item| {
+                serde_json::json!({
+                    "repo": item.repo,
+                    "path": item.path,
+                    "line": item.line_number,
+                    // Where `context` starts, so a caller can number the lines it
+                    // was handed instead of guessing the context width.
+                    "context_first_line": item.context_start(),
+                    "url": item.permalink(),
+                    "scope": item.scope,
+                    "context": item.context.iter().map(|line| clamp(line)).collect::<Vec<_>>(),
+                })
             })
-        })
-        .collect();
-    serde_json::to_string_pretty(&serde_json::json!({
-        "pattern": pattern,
-        "count": items.len(),
-        // The text output says so in its header; without it here an agent
-        // reading JSON cannot tell a complete answer from a capped one.
-        "more_available": results.more_available,
-        // Repositories that could not have appeared above, whatever they hold.
-        // A count plus a few names: the full list of a corpus that was never
-        // indexed is hundreds of lines nobody asked for.
-        "unindexed_count": unindexed.len(),
-        "unindexed_repositories": &unindexed[..unindexed.len().min(UNINDEXED_SHOWN)],
-        "matches": items,
-    }))
-    .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
+            .collect();
+        serde_json::to_string_pretty(&serde_json::json!({
+            "pattern": pattern,
+            "count": items.len(),
+            // The text output says so in its header; without it here an agent
+            // reading JSON cannot tell a complete answer from a capped one.
+            "more_available": results.more_available,
+            // Matches found but cut to honour the token budget. Distinct from
+            // `more_available`, which is about the search, not the output.
+            "omitted": results.len() - shown.len(),
+            // Repositories that could not have appeared above, whatever they hold.
+            // A count plus a few names: the full list of a corpus that was never
+            // indexed is hundreds of lines nobody asked for.
+            "unindexed_count": unindexed.len(),
+            "unindexed_repositories": &unindexed[..unindexed.len().min(UNINDEXED_SHOWN)],
+            "matches": items,
+        }))
+        .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
+    };
+    fit_within(results, budget, render).0
 }
 
 /// Machine-readable explanation of an empty result set.
@@ -49,6 +64,7 @@ pub fn render_empty_json(facts: &Facts, pattern: &str, unindexed: &[String]) -> 
         Diagnosis::SpellingMismatch { .. } => "spelling_mismatch",
         Diagnosis::TooBroad => "pattern_too_broad",
         Diagnosis::CrossLine => "pattern_spans_lines",
+        Diagnosis::FilterExcludesAll { .. } => "filter_excludes_all",
     };
     let suggestion = match &facts.diagnosis {
         Diagnosis::NearMiss { nearest, .. } => Some(nearest.clone()),
@@ -61,6 +77,7 @@ pub fn render_empty_json(facts: &Facts, pattern: &str, unindexed: &[String]) -> 
         // reading `more_available` should not have to handle it going missing
         // just because the search happened to find nothing.
         "more_available": false,
+        "omitted": 0,
         "matches": [],
         "reason": reason,
         "suggestion": suggestion,
@@ -157,18 +174,7 @@ fn is_stale(pushed_at: &str) -> bool {
 /// order of magnitude. Truncating on a real measurement, and saying so, beats
 /// returning whatever a fixed limit happens to produce.
 pub fn render_matches_within(matches: &[Match], header: &str, budget: usize) -> String {
-    // Grow the output result by result, so the cut lands on a whole match
-    // rather than mid-snippet.
-    let mut shown = 0usize;
-    let mut out = String::new();
-    for take in 1..=matches.len() {
-        let candidate = render_matches(&matches[..take], header);
-        if estimate_tokens(&candidate) > budget && take > 1 {
-            break;
-        }
-        out = candidate;
-        shown = take;
-    }
+    let (mut out, shown) = fit_within(matches, budget, |shown| render_matches(shown, header));
     if shown < matches.len() {
         out.push_str(&format!(
             "\n[{} more match(es) omitted to stay within {budget} tokens; \
@@ -177,6 +183,31 @@ pub fn render_matches_within(matches: &[Match], header: &str, budget: usize) -> 
         ));
     }
     out
+}
+
+/// The longest prefix of `matches` whose rendering fits `budget`, and how many
+/// that is. Always at least one, so a budget below a single match still
+/// answers rather than returning nothing.
+///
+/// Grows the output result by result, so the cut lands on a whole match
+/// rather than mid-snippet. Quadratic in the number of matches, which is
+/// bounded by --limit and measured in tens.
+fn fit_within(
+    matches: &[Match],
+    budget: usize,
+    render: impl Fn(&[Match]) -> String,
+) -> (String, usize) {
+    let mut shown = 0usize;
+    let mut out = String::new();
+    for take in 1..=matches.len() {
+        let candidate = render(&matches[..take]);
+        if estimate_tokens(&candidate) > budget && take > 1 {
+            break;
+        }
+        out = candidate;
+        shown = take;
+    }
+    (out, shown)
 }
 
 pub fn render_matches(matches: &[Match], header: &str) -> String {
@@ -309,6 +340,7 @@ pub fn render_empty(facts: &Facts) -> String {
              newline, but matching runs one line at a time. Search for the single line you \
              want, e.g. 'try:' instead of 'try:\\n'."
             .to_string(),
+        Diagnosis::FilterExcludesAll { advice } => advice.clone(),
     }
 }
 
@@ -351,6 +383,33 @@ mod budget_tests {
                 "budget {budget} cut without saying so"
             );
         }
+    }
+
+    /// JSON is the agent's path, so the budget must hold there too, and the
+    /// cut must be reported in a field rather than by a shorter list.
+    #[test]
+    fn json_budget_is_respected_and_reported() {
+        let results = crate::search::SearchResults {
+            matches: sample(30),
+            more_available: false,
+        };
+        for budget in [200usize, 800, 2000] {
+            let out = super::render_matches_json(&results, "x", &[], budget);
+            let used = super::estimate_tokens(&out);
+            assert!(
+                used <= budget + 40,
+                "budget {budget} produced {used} tokens"
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let count = parsed["count"].as_u64().unwrap();
+            let omitted = parsed["omitted"].as_u64().unwrap();
+            assert_eq!(count + omitted, 30, "budget {budget} lost matches");
+            assert!(omitted > 0, "budget {budget} cut without saying so");
+        }
+        let out = super::render_matches_json(&results, "x", &[], 100_000);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["omitted"], 0);
+        assert_eq!(parsed["count"], 30);
     }
 
     /// A budget large enough for everything must not truncate or add a notice.
@@ -403,6 +462,16 @@ mod line_length_tests {
             out.len() < 4_000,
             "one match produced {} bytes of output",
             out.len()
+        );
+        let results = crate::search::SearchResults {
+            matches: vec![item],
+            more_available: false,
+        };
+        let json = super::render_matches_json(&results, "needle", &[], 100_000);
+        assert!(
+            json.len() < 4_000,
+            "one JSON match produced {} bytes of output",
+            json.len()
         );
     }
 }

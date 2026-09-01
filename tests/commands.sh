@@ -100,6 +100,7 @@ ok "search --repo"             0 "match"         -- "$BIN" search "int" --repo a
 ok "search --language"         0 "match"         -- "$BIN" search "int" --language c --limit 1
 ok "search --ignore-case"      0 "match"         -- "$BIN" search "INT MAIN" -i --limit 1
 ok "search --path glob"        0 ""              -- "$BIN" search "int" --path "*.c" --limit 1
+ok "search --path matches none" 0 "no indexed file path" -- "$BIN" search "int" --path "ghost/**" --limit 1
 ok "search --include-comments" 0 ""              -- "$BIN" search "the" --include-comments --limit 1
 ok "search -C wide context"    0 "match"         -- "$BIN" search "int main" -C 10 --limit 1
 ok "search -C 0"               0 "match"         -- "$BIN" search "int main" -C 0 --limit 1
@@ -109,6 +110,7 @@ ok "show --from/--to"          0 "lines"         -- "$BIN" show antirez/smallcha
 ok "show past end of file"     0 "nothing at"    -- "$BIN" show antirez/smallchat smallchat-server.c --from 999999
 ok "recent, repo not indexed"  0 "not in this corpus" -- "$BIN" recent --repo ghost/x --hours 24
 ok "search json has line map"  0 "context_first_line" -- "$BIN" search "int main" --json --limit 1
+ok "search json honours budget" 0 '"omitted": 1' -- "$BIN" search "int" --json --max-tokens 50 --limit 2
 ok "define"                    0 ""              -- "$BIN" define main --limit 1
 ok "define --json"             0 ""              -- "$BIN" define main --json --limit 1
 ok "show"                      0 "smallchat"     -- "$BIN" show antirez/smallchat smallchat-server.c
@@ -123,6 +125,7 @@ ok "stats"                     0 "total on disk" -- "$BIN" stats
 ok "unknown --repo names itself"     0 "not in this corpus"   -- "$BIN" search int --repo ghost/x
 ok "absent --language names itself"  0 "no cobol files"       -- "$BIN" search int --language cobol
 ok "unknown --tag names itself"      0 "no repositories are tagged" -- "$BIN" search int --tag ghost
+ok "filter miss stays json"         0 '"reason": "filter_excludes_all"' -- "$BIN" search int --repo ghost/x --json
 ok "valid --repo still searches"     0 "match"                -- "$BIN" search int --repo antirez/smallchat --limit 1
 ok "update"                    0 "up to date"    -- "$BIN" update
 ok "compact"                   0 "reclaimed"     -- "$BIN" compact

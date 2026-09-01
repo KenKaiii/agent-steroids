@@ -108,7 +108,9 @@ same problem.
   steroids repos                 what is indexed
   steroids recent --tag X        what changed upstream in the last 72 hours
 
-Add --json to search, define or repos for structured output.
+Add --json to search, define or repos for structured output. Output stops at
+--max-tokens (default 6000) in both text and JSON; JSON reports the cut as
+`omitted`, separate from `more_available`.
 
 If a search says the topic is not covered, that is a gap in my corpus, not a
 bad query. Do not retry variations. Instead: run `steroids discover` to find

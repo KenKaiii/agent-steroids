@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
-use render::{render_empty, render_matches};
+use render::render_empty;
 use search::Query;
 use store::Store;
 
@@ -115,6 +115,9 @@ enum Command {
         language: Option<String>,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Stop adding results once the output would exceed this many tokens.
+        #[arg(long, default_value_t = 6000)]
+        max_tokens: usize,
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
@@ -318,6 +321,22 @@ fn human(bytes: f64) -> String {
     format!("{bytes:.0}B")
 }
 
+/// Report a search filter nothing in the corpus satisfies.
+///
+/// Same shape as any other empty result, so a caller parsing `--json` sees
+/// the usual keys with `reason: filter_excludes_all` rather than a stray
+/// line of prose that fails to parse.
+fn report_filter_miss(store: &Store, json: bool, pattern: &str, advice: String) -> Result<()> {
+    let facts = search::facts(store, search::Diagnosis::FilterExcludesAll { advice })?;
+    if json {
+        let unindexed = search::unindexed(store)?;
+        println!("{}", render::render_empty_json(&facts, pattern, &unindexed));
+    } else {
+        println!("{}", render_empty(&facts));
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let parallel = cli.parallel;
@@ -481,12 +500,12 @@ fn main() -> Result<()> {
                 && !store.list_repos()?.iter().any(|r| &r.name == repo)
             {
                 let count = store.list_repos()?.len();
-                println!(
+                let advice = format!(
                     "'{repo}' is not in this corpus, so no search can match it. \
                      {count} repositories are indexed; run `steroids repos` to see \
                      them, or `steroids add {repo}` to index this one."
                 );
-                return Ok(());
+                return report_filter_miss(&store, json, &pattern, advice);
             }
             if let Some(language) = &language {
                 // Every language in the indexed files, not just each
@@ -495,21 +514,21 @@ fn main() -> Result<()> {
                 let known: std::collections::BTreeSet<String> =
                     store.languages()?.into_iter().collect();
                 if !known.contains(&language.to_lowercase()) {
-                    println!(
+                    let advice = format!(
                         "No {language} files are indexed, so no search can match. \
                          Languages present: {}. Drop --language, or index a \
                          {language} project with \
                          `steroids discover 'language:{language}' --add`.",
                         known.into_iter().collect::<Vec<_>>().join(", ")
                     );
-                    return Ok(());
+                    return report_filter_miss(&store, json, &pattern, advice);
                 }
             }
             if let Some(tag) = &tag
                 && store.repos_tagged(Some(tag))?.is_empty()
             {
                 let known = store.tag_counts()?;
-                println!(
+                let advice = format!(
                     "No repositories are tagged '{tag}'. {}",
                     if known.is_empty() {
                         "No tags exist yet: steroids tag --add <label> <repo>".to_string()
@@ -524,9 +543,31 @@ fn main() -> Result<()> {
                         )
                     }
                 );
-                return Ok(());
+                return report_filter_miss(&store, json, &pattern, advice);
             }
             let matches = search::search(&mut store, &pattern, &query)?;
+            // Checked after the search rather than before: it scans every
+            // path, and the common case of a glob that matches is not worth
+            // 100ms on each query. Without it a glob that excludes everything
+            // is diagnosed as a pattern problem and the agent loosens a
+            // pattern that was never at fault.
+            if matches.is_empty()
+                && let Some(glob) = &path
+                && store.any_path_matches(glob)? == Some(false)
+            {
+                let advice = format!(
+                    "No indexed file path matches '{glob}', so no search can match. \
+                     Paths are relative to the repository root, like {}. Loosen the \
+                     glob, e.g. '**/*.ext', or drop --path.",
+                    store
+                        .sample_paths(3)?
+                        .iter()
+                        .map(|p| format!("'{p}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return report_filter_miss(&store, json, &pattern, advice);
+            }
             let unindexed = search::unindexed(&store)?;
             if json {
                 let facts;
@@ -536,7 +577,7 @@ fn main() -> Result<()> {
                         facts = search::diagnose(&mut store, &pattern)?;
                         render::render_empty_json(&facts, &pattern, &unindexed)
                     } else {
-                        render::render_matches_json(&matches, &pattern, &unindexed)
+                        render::render_matches_json(&matches, &pattern, &unindexed, max_tokens)
                     }
                 );
             } else if matches.is_empty() {
@@ -568,6 +609,7 @@ fn main() -> Result<()> {
             tag,
             language,
             limit,
+            max_tokens,
             json,
         } => {
             if symbol.trim().is_empty() {
@@ -600,7 +642,7 @@ fn main() -> Result<()> {
                         facts = search::diagnose(&mut store, &escaped)?;
                         render::render_empty_json(&facts, &symbol, &unindexed)
                     } else {
-                        render::render_matches_json(&matches, &symbol, &unindexed)
+                        render::render_matches_json(&matches, &symbol, &unindexed, max_tokens)
                     }
                 );
             } else if matches.is_empty() {
@@ -610,9 +652,10 @@ fn main() -> Result<()> {
                 print!("{}", render::unindexed_note(&unindexed));
                 print!(
                     "{}",
-                    render_matches(
+                    render::render_matches_within(
                         &matches,
-                        &format!("{} definition(s) of '{symbol}'", matches.len())
+                        &format!("{} definition(s) of '{symbol}'", matches.len()),
+                        max_tokens,
                     )
                 );
             }

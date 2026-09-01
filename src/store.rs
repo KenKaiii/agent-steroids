@@ -863,6 +863,32 @@ impl Store {
         Ok(rows)
     }
 
+    /// Whether any indexed file path matches a glob. `None` when the glob
+    /// holds a `[`, which SQLite reads as a class and the search reads
+    /// literally, so this cannot answer for it.
+    pub fn any_path_matches(&self, glob: &str) -> Result<Option<bool>> {
+        if glob.contains('[') {
+            return Ok(None);
+        }
+        let found: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM documents WHERE offset >= 0 AND path GLOB ?1)",
+            params![glob],
+            |row| row.get(0),
+        )?;
+        Ok(Some(found))
+    }
+
+    /// A few indexed file paths, to show what a path glob has to match.
+    pub fn sample_paths(&self, count: usize) -> Result<Vec<String>> {
+        let mut statement = self
+            .db
+            .prepare("SELECT path FROM documents WHERE offset >= 0 ORDER BY id LIMIT ?1")?;
+        let rows = statement
+            .query_map(params![count as i64], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(rows)
+    }
+
     /// Repositories carrying a tag, or all of them when `tag` is None.
     pub fn repos_tagged(&self, tag: Option<&str>) -> Result<Vec<RepoSummary>> {
         let all = self.list_repos()?;

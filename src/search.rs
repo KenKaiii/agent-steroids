@@ -602,6 +602,11 @@ pub enum Diagnosis {
     TooBroad,
     /// Every branch demands a newline, which a line-oriented match never sees.
     CrossLine,
+    /// A --repo, --tag, --language or --path filter that nothing in the corpus
+    /// satisfies, so the pattern was never tried. The advice names the filter.
+    FilterExcludesAll {
+        advice: String,
+    },
 }
 
 /// Can this pattern only match text that spans a line break?
@@ -666,6 +671,38 @@ pub fn unindexed(store: &Store) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// The corpus's main languages, most common first.
+///
+/// Counted over repositories, not documents: the message says how many
+/// repositories the corpus holds, and grouping every document by language
+/// instead cost 109ms of a diagnosis that should be instant.
+fn top_languages(store: &Store) -> Result<Vec<String>> {
+    let languages = store
+        .db
+        .prepare(
+            "SELECT language, COUNT(*) c FROM repos WHERE language IS NOT NULL \
+             GROUP BY language ORDER BY c DESC LIMIT 6",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(languages)
+}
+
+/// A diagnosis already known, with the corpus shape it is reported against.
+/// For causes established without probing the pattern, such as a filter
+/// nothing satisfies.
+pub fn facts(store: &Store, diagnosis: Diagnosis) -> Result<Facts> {
+    let repos: usize = store
+        .db
+        .query_row("SELECT COUNT(*) FROM repos", [], |row| row.get::<_, i64>(0))?
+        as usize;
+    Ok(Facts {
+        diagnosis,
+        repos,
+        languages: top_languages(store)?,
+    })
+}
+
 /// Explain why a search found nothing.
 ///
 /// The agent should act differently per cause: index repositories (empty
@@ -693,17 +730,7 @@ pub fn diagnose(store: &mut Store, pattern: &str) -> Result<Facts> {
         });
     }
 
-    // Counted over repositories, not documents: the message says how many
-    // repositories the corpus holds, and grouping every document by language
-    // instead cost 109ms of a diagnosis that should be instant.
-    let languages: Vec<String> = store
-        .db
-        .prepare(
-            "SELECT language, COUNT(*) c FROM repos WHERE language IS NOT NULL \
-             GROUP BY language ORDER BY c DESC LIMIT 6",
-        )?
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
+    let languages = top_languages(store)?;
 
     // Do the longest literals in the pattern appear anywhere at all? If even a
     // fragment is unknown, no rephrasing will help and the honest answer is

@@ -32,6 +32,7 @@ pub fn short_diagnosis(facts: &Facts) -> String {
         Diagnosis::CrossLine => {
             "Matching runs one line at a time, so a newline never matches.".into()
         }
+        Diagnosis::FilterExcludesAll { advice } => advice.clone(),
     }
 }
 
