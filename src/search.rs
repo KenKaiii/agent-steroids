@@ -421,7 +421,12 @@ fn fragment_present(store: &mut Store, run: &str) -> Result<bool> {
     let mut ids: Vec<i64> = narrowed.into_iter().collect();
     ids.sort_unstable();
     for doc_id in ids.into_iter().take(FRAGMENT_CONFIRM_LIMIT) {
-        let content = store.read_document(doc_id)?;
+        // These ids come from the trigram index, which an update leaves
+        // pointing at documents that have been replaced. A stale entry is
+        // expected until the index is rebuilt, so skip it.
+        let Some(content) = store.try_read_document(doc_id)? else {
+            continue;
+        };
         if memchr::memmem::find(&content, run.as_bytes()).is_some() {
             return Ok(true);
         }

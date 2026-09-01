@@ -373,12 +373,21 @@ impl Store {
 
     // -- reading ------------------------------------------------------------
 
+    /// Content of one document.
+    ///
+    /// A missing id is an error rather than empty content: the caller asked
+    /// for something specific. Callers walking the index should use
+    /// `try_read_document`, since the index legitimately outlives the
+    /// documents it points at until the next rebuild.
     pub fn read_document(&mut self, doc_id: i64) -> Result<Vec<u8>> {
-        let (offset, length): (i64, i64) = self.db.query_row(
-            "SELECT offset, length FROM documents WHERE id = ?1",
-            params![doc_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let (offset, length): (i64, i64) = self
+            .db
+            .query_row(
+                "SELECT offset, length FROM documents WHERE id = ?1",
+                params![doc_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .with_context(|| format!("document {doc_id} is not in the corpus"))?;
         if offset < 0 {
             bail!("document {doc_id} not stored");
         }
@@ -398,6 +407,28 @@ impl Store {
             None => zstd::Decoder::new(&packed[..])?.read_to_end(&mut out)?,
         };
         Ok(out)
+    }
+
+    /// Content of one document, or None if it is no longer stored.
+    ///
+    /// The trigram index references document ids, and an update replaces a
+    /// repository's documents with new rows. Until the index is rebuilt it
+    /// therefore points at ids that no longer exist, which is expected rather
+    /// than an error: skip them instead of failing the whole query.
+    pub fn try_read_document(&mut self, doc_id: i64) -> Result<Option<Vec<u8>>> {
+        let found: Option<(i64, i64)> = self
+            .db
+            .query_row(
+                "SELECT offset, length FROM documents WHERE id = ?1",
+                params![doc_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        match found {
+            Some((offset, _)) if offset < 0 => Ok(None),
+            Some(_) => self.read_document(doc_id).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Trigrams dropped from the index for being too common.
@@ -943,6 +974,35 @@ mod tests {
         assert!(
             store.list_repos()?.is_empty(),
             "a repository with no content was still listed"
+        );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// The trigram index outlives the documents it points at: an update
+    /// replaces a repository's rows, so index entries reference ids that no
+    /// longer exist until the next rebuild. Reading one must skip, not fail,
+    /// or every search between an update and a reindex errors out.
+    #[test]
+    fn a_stale_index_entry_does_not_fail_a_search() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-staleindex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::open_for_write(&dir)?;
+        let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        let id = store.add_document(repo, "a.rs", "rust", b"fn main() {}".to_vec())?;
+        store.flush_pending()?;
+
+        assert!(store.try_read_document(id)?.is_some());
+        // Replacing the repository drops its documents, as an update does.
+        store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        assert!(
+            store.try_read_document(id)?.is_none(),
+            "a replaced document was still readable"
+        );
+        assert!(
+            store.read_document(id).is_err(),
+            "asking for a specific missing document should still be an error"
         );
 
         std::fs::remove_dir_all(&dir)?;
