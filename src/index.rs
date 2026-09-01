@@ -297,7 +297,7 @@ mod tests {
     /// that are present, with nothing to indicate anything is wrong.
     #[test]
     fn incremental_matches_a_full_rebuild() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-incr-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("incr");
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = crate::store::Store::open_for_write(&dir)?;
         let mut noop = |_: usize, _: usize| {};

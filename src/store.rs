@@ -953,6 +953,23 @@ fn lock_exclusive(_file: &File) -> Result<()> {
     bail!("this platform has no file locking, so writing a corpus is unsafe")
 }
 
+/// A temporary directory unique to one test run.
+///
+/// Every test in this process shares a pid, and cargo runs them on parallel
+/// threads, so a name built from the pid alone collides. On Unix the collision
+/// is usually harmless; on Windows deleting a directory another thread still
+/// has open fails outright.
+#[cfg(test)]
+pub fn scratch_dir(label: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("steroids-{label}-{}-{unique}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -971,8 +988,7 @@ mod tests {
     /// content must survive byte for byte.
     #[test]
     fn compaction_preserves_every_document() -> Result<()> {
-        let directory =
-            std::env::temp_dir().join(format!("steroids-compact-{}", std::process::id()));
+        let directory = crate::store::scratch_dir("compact");
         let _ = std::fs::remove_dir_all(&directory);
         let mut store = Store::open(&directory)?;
 
@@ -1023,7 +1039,7 @@ mod tests {
     /// so a repository looks indexed when none of its code is there.
     #[test]
     fn interrupted_ingest_leaves_no_phantom_rows() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-phantom-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("phantom");
         let _ = std::fs::remove_dir_all(&dir);
 
         {
@@ -1061,7 +1077,7 @@ mod tests {
     /// or every search between an update and a reindex errors out.
     #[test]
     fn a_stale_index_entry_does_not_fail_a_search() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-staleindex-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("staleindex");
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = Store::open_for_write(&dir)?;
         let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
@@ -1093,7 +1109,7 @@ mod tests {
     /// unreadable.
     #[test]
     fn compaction_leaves_the_corpus_readable() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-compact2-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("compact2");
         let _ = std::fs::remove_dir_all(&dir);
 
         let payload = b"fn main() { println!(\"hi\"); }\n".repeat(30);
@@ -1129,7 +1145,7 @@ mod tests {
     /// offsets against the old blob file and destroying every document.
     #[test]
     fn a_reader_never_deletes_a_pending_compaction() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-pending-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("pending");
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut store = Store::open_for_write(&dir)?;
@@ -1167,7 +1183,7 @@ mod tests {
     /// ingest left 34 of 54 documents unreadable.
     #[test]
     fn concurrent_writers_do_not_corrupt_documents() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-lock-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("lock");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
 
@@ -1209,7 +1225,7 @@ mod tests {
     /// before freshness tracking has no pushed_at and must be left alone.
     #[test]
     fn stale_detection_ignores_unknown_dates() -> Result<()> {
-        let directory = std::env::temp_dir().join(format!("steroids-stale-{}", std::process::id()));
+        let directory = crate::store::scratch_dir("stale");
         let _ = std::fs::remove_dir_all(&directory);
         let mut store = Store::open(&directory)?;
 
@@ -1288,7 +1304,7 @@ mod tests {
     /// wipe the last-commit date that decay depends on.
     #[test]
     fn reingest_without_metadata_keeps_decay_data() -> Result<()> {
-        let directory = std::env::temp_dir().join(format!("steroids-keep-{}", std::process::id()));
+        let directory = crate::store::scratch_dir("keep");
         let _ = std::fs::remove_dir_all(&directory);
         let mut store = Store::open(&directory)?;
 
@@ -1327,7 +1343,7 @@ mod tests {
     /// back: zstd cannot train a dictionary from very few samples.
     #[test]
     fn small_corpus_round_trips() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("corpus-test-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("corpustest");
         let _ = std::fs::remove_dir_all(&dir);
         let payload = b"def hello():\n    return 42\n".repeat(40);
 

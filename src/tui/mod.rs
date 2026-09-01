@@ -202,7 +202,7 @@ mod edge_cases {
     /// A brand new user opens the app before adding anything.
     #[test]
     fn empty_corpus_renders_and_navigates() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("steroids-empty-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("empty");
         let _ = std::fs::remove_dir_all(&dir);
         let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
 
@@ -296,7 +296,7 @@ mod jobs {
             println!("SKIP: set STEROIDS_NETWORK_TESTS=1 (needs GitHub)");
             return Ok(());
         }
-        let dir = std::env::temp_dir().join(format!("steroids-jobs-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("jobs");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
@@ -356,7 +356,7 @@ mod jobs {
             println!("SKIP: set STEROIDS_NETWORK_TESTS=1 (needs GitHub)");
             return Ok(());
         }
-        let dir = std::env::temp_dir().join(format!("steroids-jobfail-{}", std::process::id()));
+        let dir = crate::store::scratch_dir("jobfail");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
@@ -404,7 +404,7 @@ mod interaction {
         }
         // Work on a copy: this test deletes a repository.
         let source = PathBuf::from(root);
-        let scratch = std::env::temp_dir().join(format!("steroids-rm-{}", std::process::id()));
+        let scratch = crate::store::scratch_dir("rm");
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch)?;
         for file in ["corpus.db", "blobs.bin"] {

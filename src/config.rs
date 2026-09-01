@@ -174,8 +174,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_a_store() -> Result<()> {
-        let directory =
-            std::env::temp_dir().join(format!("steroids-config-{}", std::process::id()));
+        let directory = crate::store::scratch_dir("config");
         let _ = std::fs::remove_dir_all(&directory);
         // Writing settings, so open for write: a read-only handle cannot take
         // the corpus lock and on Windows cannot write at all.
