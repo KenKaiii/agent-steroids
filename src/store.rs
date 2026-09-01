@@ -134,11 +134,25 @@ impl Store {
             None
         };
 
-        let db = Connection::open(root.join("corpus.db"))?;
+        let path = root.join("corpus.db");
+        // A WAL database needs to write sidecar files even to read, so a corpus
+        // on a read-only mount or drive cannot be opened normally. Searching one
+        // is legitimate, so retry read-only before giving up.
+        let db = match Connection::open(&path) {
+            Ok(db) if for_write || db.pragma_update(None, "user_version", 0).is_ok() => db,
+            _ => Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?,
+        };
         // The ALTER statements fail on an existing corpus that already has the
         // columns; SQLite has no ADD COLUMN IF NOT EXISTS, so run them
         // individually and let a duplicate-column error pass.
-        for statement in SCHEMA.split(';') {
+        // Schema setup writes, so skip it when the database is not writable.
+        let writable = db.pragma_update(None, "user_version", 0).is_ok();
+        for statement in SCHEMA.split(';').filter(|_| writable) {
             let statement = statement.trim();
             if statement.is_empty() {
                 continue;
@@ -151,11 +165,15 @@ impl Store {
         }
         // Durability matters more than ingest speed here, but the default
         // rollback journal is slow for the many small writes an ingest makes.
-        db.pragma_update(None, "journal_mode", "WAL")?;
+        // WAL needs to create sidecar files, so it fails on a corpus the user
+        // cannot write to: a shared read-only mount, or one on a locked drive.
+        // Searching such a corpus is legitimate, so fall back rather than
+        // refusing to open it at all.
+        let _ = db.pragma_update(None, "journal_mode", "WAL");
         // Bound the page cache. SQLite's default grows with use; a negative
         // value means kibibytes rather than pages, so this caps the cache at
         // 8MB no matter how large the corpus becomes.
-        db.pragma_update(None, "cache_size", -8_000)?;
+        let _ = db.pragma_update(None, "cache_size", -8_000);
         // Wait rather than failing when another process holds a write lock.
         db.busy_timeout(std::time::Duration::from_secs(30))?;
 
@@ -184,6 +202,7 @@ impl Store {
             stop_trigrams: None,
         };
         store.recover_compaction()?;
+        store.discard_unflushed()?;
         Ok(store)
     }
 
@@ -482,6 +501,32 @@ impl Store {
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .and_then(|text| text.parse().ok())
             .unwrap_or(0))
+    }
+
+    /// Drop document rows whose content never reached the blob file.
+    ///
+    /// A row is inserted with offset -1 and filled in when the batch flushes,
+    /// so an ingest killed mid-run leaves rows pointing at nothing. They are
+    /// invisible to search but still counted, which makes a repository look
+    /// indexed when none of its code is there. Discarding them lets a re-run
+    /// fetch the repository properly.
+    fn discard_unflushed(&mut self) -> Result<()> {
+        if self.lock.is_none() {
+            // Read-only session: nothing to clean, and nothing may be written.
+            return Ok(());
+        }
+        let removed = self
+            .db
+            .execute("DELETE FROM documents WHERE offset < 0", [])?;
+        if removed > 0 {
+            // A repository left with no content at all was never really
+            // ingested, so forget it rather than reporting an empty one.
+            self.db.execute(
+                "DELETE FROM repos WHERE id NOT IN (SELECT DISTINCT repo_id FROM documents)",
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     /// Finish or discard a compaction that was interrupted before its rename.
@@ -786,6 +831,43 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&directory)?;
+        Ok(())
+    }
+
+    /// An ingest killed mid-run leaves document rows whose content never
+    /// reached the blob file. They are invisible to search but still counted,
+    /// so a repository looks indexed when none of its code is there.
+    #[test]
+    fn interrupted_ingest_leaves_no_phantom_rows() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-phantom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        {
+            let mut store = Store::open_for_write(&dir)?;
+            let repo = store.add_repo("ghost/repo", &crate::fetch::Upstream::default())?;
+            // Queued but never flushed, exactly as a killed process leaves it.
+            store.add_document(repo, "a.rs", "rust", b"fn main() {}".to_vec())?;
+            // Drop the queue so the flush on close has nothing to write, which
+            // reproduces the killed-process state. The Store still drops
+            // normally, releasing its lock.
+            store.pending.clear();
+            store.pending_bytes = 0;
+        }
+
+        // Reopening for write must clear the wreckage.
+        let store = Store::open_for_write(&dir)?;
+        let orphans: i64 = store.db.query_row(
+            "SELECT COUNT(*) FROM documents WHERE offset < 0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(orphans, 0, "unflushed rows survived");
+        assert!(
+            store.list_repos()?.is_empty(),
+            "a repository with no content was still listed"
+        );
+
+        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 
