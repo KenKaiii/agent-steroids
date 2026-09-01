@@ -18,7 +18,12 @@ const MAX_CANDIDATES: usize = 20_000;
 /// Files read to confirm a literal really occurs, when diagnosing empty results.
 const FRAGMENT_CONFIRM_LIMIT: usize = 40;
 /// Lines of context shown either side of a match.
-pub const DEFAULT_CONTEXT_LINES: usize = 3;
+///
+/// Five, because three is enough to locate a match but not to judge it: a
+/// reader comparing how several projects solved the same problem needs to see
+/// the shape of each implementation, not a fragment. Matches what the hosted
+/// code search tools settled on.
+pub const DEFAULT_CONTEXT_LINES: usize = 5;
 
 /// A hit inside a comment or docstring is prose about code, not an
 /// implementation to learn from. Cheap prefix check, no parser.
