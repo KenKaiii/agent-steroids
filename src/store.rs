@@ -85,6 +85,10 @@ pub struct RepoSummary {
 }
 
 pub struct Store {
+    /// Held for the lifetime of a write session and never read: closing the
+    /// handle on drop is what releases the lock.
+    #[allow(dead_code)]
+    lock: Option<File>,
     pub db: Connection,
     blob_path: PathBuf,
     writer: Option<File>,
@@ -100,9 +104,36 @@ pub struct Store {
 }
 
 impl Store {
+    /// Open for reading. Never blocks, even while an ingest is running.
     pub fn open(root: &Path) -> Result<Self> {
+        Self::open_inner(root, false)
+    }
+
+    /// Open for writing, waiting for any other writer to finish first.
+    ///
+    /// The lock must be held before the shared zstd dictionary is read, not
+    /// just before the first write: two writers that each read "no dictionary
+    /// yet" will each train their own, and whichever saves last leaves the
+    /// other's documents undecodable.
+    pub fn open_for_write(root: &Path) -> Result<Self> {
+        Self::open_inner(root, true)
+    }
+
+    fn open_inner(root: &Path, for_write: bool) -> Result<Self> {
         std::fs::create_dir_all(root)
             .with_context(|| format!("creating corpus directory {}", root.display()))?;
+        // Taken before anything is read, and released when the Store drops.
+        let lock = if for_write {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(root.join("write.lock"))?;
+            lock_exclusive(&file)?;
+            Some(file)
+        } else {
+            None
+        };
+
         let db = Connection::open(root.join("corpus.db"))?;
         // The ALTER statements fail on an existing corpus that already has the
         // columns; SQLite has no ADD COLUMN IF NOT EXISTS, so run them
@@ -125,6 +156,8 @@ impl Store {
         // value means kibibytes rather than pages, so this caps the cache at
         // 8MB no matter how large the corpus becomes.
         db.pragma_update(None, "cache_size", -8_000)?;
+        // Wait rather than failing when another process holds a write lock.
+        db.busy_timeout(std::time::Duration::from_secs(30))?;
 
         let dictionary = db
             .query_row("SELECT value FROM meta WHERE key='zstd_dict'", [], |row| {
@@ -135,7 +168,11 @@ impl Store {
             .query_row("SELECT 1 FROM meta WHERE key='dictless'", [], |_| Ok(()))
             .is_ok();
 
+        // Writers append to blobs.bin and share one trained dictionary, so two
+        // at once would leave each other's documents undecodable. Readers are
+        // unaffected: this lock is only taken when writing.
         let mut store = Self {
+            lock,
             db,
             blob_path: root.join("blobs.bin"),
             writer: None,
@@ -657,6 +694,36 @@ impl Store {
     }
 }
 
+/// Take an exclusive advisory lock, blocking until it is available.
+///
+/// `flock` is used directly because the standard library has no file locking
+/// on stable, and pulling in a dependency for two lines of libc is not worth
+/// it. The lock releases automatically when the file handle closes, including
+/// on a crash, so a killed ingest cannot leave the corpus permanently locked.
+#[cfg(unix)]
+fn lock_exclusive(file: &File) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+    // SAFETY: the descriptor is owned by `file` and valid for this call.
+    if unsafe { flock(file.as_raw_fd(), LOCK_EX) } != 0 {
+        bail!(
+            "could not lock the corpus for writing: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(())
+}
+
+/// Windows has no flock; concurrent writers are rare enough there that the
+/// SQLite busy timeout alone is accepted rather than adding a dependency.
+#[cfg(not(unix))]
+fn lock_exclusive(_file: &File) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +786,49 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&directory)?;
+        Ok(())
+    }
+
+    /// Two writers must not both train a zstd dictionary: whichever saves last
+    /// leaves the other's documents undecodable. Real failure: a concurrent
+    /// ingest left 34 of 54 documents unreadable.
+    #[test]
+    fn concurrent_writers_do_not_corrupt_documents() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("steroids-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+
+        let payload = b"fn main() { println!(\"hello\"); }\n".repeat(20);
+        let write = |tag: &str| -> Result<Vec<i64>> {
+            let mut store = Store::open_for_write(&dir)?;
+            let repo = store.add_repo(tag, &crate::fetch::Upstream::default())?;
+            let ids = (0..12)
+                .map(|i| {
+                    store.add_document(repo, &format!("{tag}/f{i}.rs"), "rust", payload.clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            store.flush_pending()?;
+            Ok(ids)
+        };
+
+        let (first, second) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| write("a/one"));
+            let b = scope.spawn(|| write("b/two"));
+            (a.join().expect("thread"), b.join().expect("thread"))
+        });
+        let mut ids = first?;
+        ids.extend(second?);
+
+        // Every document written by either party must still decode.
+        let mut store = Store::open(&dir)?;
+        for id in ids {
+            let content = store.read_document(id)?;
+            assert!(
+                content.starts_with(b"fn main()"),
+                "document {id} came back corrupted"
+            );
+        }
+        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 

@@ -594,6 +594,11 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     if pattern.len() > MAX_PATTERN_LENGTH {
         bail!("pattern too long");
     }
+    // A limit of zero can only return nothing, and reporting that as "no
+    // matches" would blame the pattern for the caller's argument.
+    if query.limit == 0 {
+        bail!("limit must be at least 1");
+    }
     let matcher = RegexBuilder::new(pattern)
         .case_insensitive(query.ignore_case)
         .build()

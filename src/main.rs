@@ -251,10 +251,29 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let parallel = cli.parallel;
     let root = corpus_root(cli.root);
-    let mut store = Store::open(&root)?;
 
     let Some(command) = cli.command else {
-        return tui::run(root, store);
+        return tui::run(root.clone(), Store::open(&root)?);
+    };
+
+    // Commands that write must hold the corpus lock for their whole run, so a
+    // second ingest waits instead of corrupting the shared dictionary.
+    let writes = matches!(
+        command,
+        Command::Add { .. }
+            | Command::Update
+            | Command::Index
+            | Command::Decay { .. }
+            | Command::Remove { .. }
+            | Command::Compact
+            | Command::Tag { .. }
+            | Command::Config { .. }
+            | Command::Discover { add: true, .. }
+    );
+    let mut store = if writes {
+        Store::open_for_write(&root)?
+    } else {
+        Store::open(&root)?
     };
 
     match command {
