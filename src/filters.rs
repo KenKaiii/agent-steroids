@@ -1,7 +1,7 @@
 //! What counts as a useful code sample. Everything else is dropped at ingest.
 
 /// Only these extensions are indexed. Deliberately code-only: no docs, no data.
-const CODE_EXTENSIONS: &[(&str, &str)] = &[
+pub(crate) const CODE_EXTENSIONS: &[(&str, &str)] = &[
     ("py", "python"),
     ("pyi", "python"),
     ("js", "javascript"),

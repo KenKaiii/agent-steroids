@@ -5,10 +5,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::text::Line;
 use ratatui::widgets::ListState;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
+use super::highlight::Highlighter;
 use super::job::{self, Msg};
 use crate::search::{self, Query};
 use crate::store::Store;
@@ -79,8 +81,10 @@ pub struct App {
     pub searching_message: Option<String>,
 
     pub preview_title: String,
-    pub preview_lines: Vec<String>,
+    /// Coloured once when the file opens, not on every frame.
+    pub preview_lines: Vec<Line<'static>>,
     pub preview_scroll: usize,
+    pub highlighter: Highlighter,
 
     pub tx: Sender<Msg>,
     pub rx: Receiver<Msg>,
@@ -111,6 +115,7 @@ impl App {
             preview_title: String::new(),
             preview_lines: Vec::new(),
             preview_scroll: 0,
+            highlighter: Highlighter::default(),
             tx,
             rx,
         };
@@ -233,11 +238,12 @@ impl App {
         match self.store.read_path(repo, path)? {
             Some(content) => {
                 let text = String::from_utf8_lossy(&content);
-                self.preview_lines = text
+                let lines: Vec<String> = text
                     .lines()
                     .take(PREVIEW_MAX_LINES)
                     .map(|line| line.to_string())
                     .collect();
+                self.preview_lines = self.highlighter.lines(path, &lines);
                 self.preview_title = format!("{repo}/{path}");
                 // Show a little above the interesting line rather than putting
                 // it flush against the top edge.

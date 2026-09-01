@@ -331,14 +331,15 @@ fn draw_search(frame: &mut Frame, area: Rect, app: &mut App) {
         ];
         // Mark the line that actually matched; without it the reader has to
         // guess which of seven lines of context is the hit.
-        lines.extend(hit.context.iter().enumerate().map(|(offset, line)| {
+        let context = app.highlighter.lines(&hit.path, &hit.context);
+        lines.extend(context.into_iter().enumerate().map(|(offset, mut line)| {
             if offset == hit.context_offset {
-                Line::from(vec![
-                    Span::styled("▌", Style::default().fg(ACCENT)),
-                    Span::styled(line.clone(), Style::default().add_modifier(Modifier::BOLD)),
-                ])
+                line.spans
+                    .insert(0, Span::styled("▌", Style::default().fg(ACCENT)));
+                line.style(Style::default().add_modifier(Modifier::BOLD))
             } else {
-                Line::from(vec![Span::raw(" "), Span::raw(line.clone())])
+                line.spans.insert(0, Span::raw(" "));
+                line
             }
         }));
         frame.render_widget(Paragraph::new(lines).block(panel("Preview")), panes[1]);
@@ -355,14 +356,16 @@ fn draw_preview(frame: &mut Frame, area: Rect, app: &mut App) {
     let lines: Vec<Line> = app.preview_lines[start..end]
         .iter()
         .enumerate()
-        .map(|(offset, text)| {
-            Line::from(vec![
+        .map(|(offset, code)| {
+            let mut line = code.clone();
+            line.spans.insert(
+                0,
                 Span::styled(
                     format!("{:>number_width$}  ", start + offset + 1),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::raw(text.clone()),
-            ])
+            );
+            line
         })
         .collect();
 

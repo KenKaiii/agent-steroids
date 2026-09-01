@@ -19,7 +19,9 @@ regex = "1.13.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }
 tar = "0.4.46"
 tui-input = "0.15"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 ureq = "3.4.0"
 zstd = "0.13.3"

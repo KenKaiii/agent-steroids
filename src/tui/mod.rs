@@ -1,6 +1,7 @@
 //! The interactive app, shown when `steroids` runs with no subcommand.
 
 mod app;
+mod highlight;
 pub(crate) mod job;
 mod ui;
 
@@ -493,7 +494,7 @@ mod resources {
         let retained = |app: &App| -> usize {
             app.repos.len() * std::mem::size_of::<crate::store::RepoSummary>()
                 + app.files.len() * 64
-                + app.preview_lines.iter().map(|l| l.len()).sum::<usize>()
+                + app.preview_lines.iter().map(|l| l.width()).sum::<usize>()
                 + app.hits.len() * 256
         };
         let before = retained(&app);
