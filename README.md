@@ -132,6 +132,7 @@ same problem.
   steroids define <Symbol>       where something is defined
   steroids show <repo> <path>    read a full file
   steroids repos                 what is indexed
+  steroids recent --tag X        what changed upstream in the last 72 hours
 
 Add --json to search, define or repos for structured output.
 
@@ -205,6 +206,44 @@ steroids
 Run it with nothing after it and you get a proper interface. Browse your repos, open any file, search as you type with results appearing live. Arrow keys to move, `esc` to go back, `q` to quit. Press `a` to add a repo, `d` to remove one, `u` to refresh everything.
 
 Downloads run in the background, so it never freezes on you.
+
+## 🏷️ Categories
+
+Label repos so you can work with a slice of the corpus:
+
+```bash
+steroids add --tag coding-agent openai/codex sst/opencode
+steroids tag --add rust,cli sharkdp/fd BurntSushi/ripgrep
+steroids tag                          # what tags exist
+steroids repos --tag coding-agent     # what is in one
+```
+
+The starter list is grouped by category already, so you can tag the whole thing
+in one pass from its section headers.
+
+## 🔭 What changed this week
+
+An indexed corpus is a snapshot. This is the other question: what have these
+projects actually done lately?
+
+```bash
+steroids recent --tag coding-agent --hours 72
+steroids recent --repo openai/codex --hours 24
+steroids recent --hours 24 --limit 20        # everything
+```
+
+```
+2026-09-01T01:49  bytedance/deer-flow    he-yufeng   fix(security): sanitize MCP-sourced tool results
+2026-09-01T01:38  stablyai/orca          nwparker    perf(relay): cache process-table descendant indexes
+```
+
+Useful when you are building in a field that moves weekly. Your agent can read
+what a dozen similar projects changed in the last three days, then apply the
+same fix or pattern to yours before it is written up anywhere.
+
+This reads commit feeds rather than the API, so it is not rate limited and
+needs no token. Checking all 485 repositories takes about 30 seconds; one tag
+is under 2 seconds. Add `--json` for structured output.
 
 ## 🧹 Keeping it fresh
 

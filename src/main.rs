@@ -9,6 +9,7 @@ mod discover;
 mod fetch;
 mod filters;
 mod index;
+mod recent;
 mod render;
 mod search;
 mod store;
@@ -54,6 +55,9 @@ enum Command {
         /// Keep test files, which are excluded by default
         #[arg(long)]
         include_tests: bool,
+        /// Label these repositories, e.g. --tag coding-agent
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
     /// Build the trigram index. Run after any add.
     Index,
@@ -99,8 +103,35 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         limit: usize,
     },
+    /// Show what changed upstream recently
+    Recent {
+        /// Only repositories carrying this tag
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only this repository
+        #[arg(long)]
+        repo: Option<String>,
+        /// How far back to look
+        #[arg(long, default_value_t = 72)]
+        hours: u32,
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Label repositories so they can be grouped and filtered
+    Tag {
+        /// Labels to apply. Omit to list every tag in use.
+        #[arg(long, value_delimiter = ',')]
+        add: Vec<String>,
+        /// Repositories to label. Omit with --add to tag everything.
+        repos: Vec<String>,
+    },
     /// List indexed repositories
     Repos {
+        /// Only repositories carrying this tag
+        #[arg(long)]
+        tag: Option<String>,
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
@@ -190,6 +221,17 @@ fn link(repo: &str, width: usize) -> String {
     format!("\u{1b}]8;;https://gitee.com/{bare}\u{7}{padded}\u{1b}]8;;\u{7}")
 }
 
+/// Shorten to `width`, so a column stays a column.
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    text.chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "\u{2026}"
+}
+
 fn human(bytes: f64) -> String {
     for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("KB", 1e3)] {
         if bytes >= scale {
@@ -214,6 +256,7 @@ fn main() -> Result<()> {
             repos,
             from_file,
             include_tests,
+            tag,
         } => {
             let mut names = repos;
             if let Some(path) = from_file {
@@ -228,14 +271,23 @@ fn main() -> Result<()> {
                 eprintln!("No repositories given. Pass names or --from-file.");
                 std::process::exit(2);
             }
-            if ingest_all(
+            let failures = ingest_all(
                 &mut store,
                 &names,
                 include_tests,
                 parallel,
                 &Default::default(),
-            )? > 0
-            {
+            )?;
+            // Label whatever landed, so a partly failed batch is still tagged.
+            if !tag.is_empty() {
+                for name in &names {
+                    if let Ok(repo) = fetch::normalize_repo(name) {
+                        store.tag_repo(&repo, &tag)?;
+                    }
+                }
+                eprintln!("  tagged: {}", tag.join(", "));
+            }
+            if failures > 0 {
                 std::process::exit(1);
             }
             eprintln!("  next: steroids index");
@@ -415,8 +467,8 @@ fn main() -> Result<()> {
             println!("\n  {} files shown for {repo}", paths.len());
         }
 
-        Command::Repos { json } => {
-            let rows = store.list_repos()?;
+        Command::Repos { tag, json } => {
+            let rows = store.repos_tagged(tag.as_deref())?;
             if json {
                 let items: Vec<serde_json::Value> = rows
                     .iter()
@@ -430,6 +482,8 @@ fn main() -> Result<()> {
                             "disk_bytes": summary.disk_bytes,
                             "source_bytes": summary.source_bytes,
                             "last_commit": summary.pushed_at,
+                            "tags": summary.tags.split(',').filter(|t| !t.is_empty())
+                                .collect::<Vec<_>>(),
                             "url": format!("https://github.com/{}", summary.name),
                         })
                     })
@@ -618,6 +672,103 @@ fn main() -> Result<()> {
                     println!("  {key} = {}", settings.get(&key));
                 }
             }
+        }
+
+        Command::Recent {
+            tag,
+            repo,
+            hours,
+            limit,
+            json,
+        } => {
+            let repos: Vec<String> = match &repo {
+                Some(one) => vec![fetch::normalize_repo(one)?],
+                None => store
+                    .repos_tagged(tag.as_deref())?
+                    .into_iter()
+                    .map(|r| r.name)
+                    .collect(),
+            };
+            if repos.is_empty() {
+                println!("  no repositories match. Try: steroids tag");
+                return Ok(());
+            }
+
+            let mut commits = recent::for_repos(&repos, hours, parallel);
+            // Newest first across every repository, so the answer to "what
+            // moved this week" reads as one timeline.
+            commits.sort_by(|a, b| b.when.cmp(&a.when));
+            commits.truncate(limit);
+
+            if json {
+                let items: Vec<serde_json::Value> = commits
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "repo": c.repo,
+                            "when": c.when,
+                            "author": c.author,
+                            "title": c.title,
+                            "url": c.url,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&items)?);
+            } else if commits.is_empty() {
+                println!(
+                    "  no commits in the last {hours} hours across {} repositories",
+                    repos.len()
+                );
+            } else {
+                // Sorted by time across every repository, so one project
+                // recurs. Name it on each line rather than heading a block a
+                // later commit would break up anyway.
+                for c in &commits {
+                    println!(
+                        "  {}  {:<28} {:<14} {}",
+                        &c.when[..16],
+                        truncate(&c.repo, 28),
+                        truncate(&c.author, 14),
+                        c.title
+                    );
+                }
+                println!(
+                    "\n  {} commits in the last {hours} hours, {} repositories checked",
+                    commits.len(),
+                    repos.len()
+                );
+            }
+        }
+
+        Command::Tag { add, repos } => {
+            if add.is_empty() {
+                let counts = store.tag_counts()?;
+                if counts.is_empty() {
+                    println!("  no tags yet. Add some: steroids tag --add coding-agent owner/name");
+                } else {
+                    for (tag, count) in counts {
+                        println!("  {tag:<24} {count} repositories");
+                    }
+                }
+                return Ok(());
+            }
+            let targets: Vec<String> = if repos.is_empty() {
+                store.list_repos()?.into_iter().map(|r| r.name).collect()
+            } else {
+                repos
+                    .iter()
+                    .map(|r| fetch::normalize_repo(r))
+                    .collect::<Result<_>>()?
+            };
+            let mut tagged = 0;
+            for name in &targets {
+                if store.tag_repo(name, &add)? {
+                    tagged += 1;
+                } else {
+                    eprintln!("  not in corpus: {name}");
+                }
+            }
+            println!("  tagged {tagged} repositories: {}", add.join(", "));
         }
 
         Command::Compact => {

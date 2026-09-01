@@ -206,6 +206,11 @@ pub struct Upstream {
     pub archived: bool,
 }
 
+/// Fetch a text endpoint with the shared headers.
+pub fn get_text(url: &str, accept: &str) -> Result<String> {
+    Ok(get(url, accept)?.body_mut().read_to_string()?)
+}
+
 /// Fetch a JSON endpoint as text, with the shared auth and user-agent headers.
 pub fn get_json(url: &str) -> Result<String> {
     Ok(get(url, "application/vnd.github+json")?

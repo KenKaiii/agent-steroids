@@ -43,11 +43,9 @@ CREATE TABLE IF NOT EXISTS repos (
 ALTER TABLE repos ADD COLUMN pushed_at TEXT;
 ALTER TABLE repos ADD COLUMN stars INTEGER;
 ALTER TABLE repos ADD COLUMN archived INTEGER;
--- License matters when an agent adapts a pattern: copying from GPL code into a
--- proprietary project is a real problem, and the agent cannot know unless we
--- record it. Description is a one-line hint of what the repo is for.
-ALTER TABLE repos ADD COLUMN license TEXT;
-ALTER TABLE repos ADD COLUMN description TEXT;
+-- Free-form labels, comma separated, so a corpus can be sliced by what a
+-- repository is for, such as coding-agent or rust, not only by name.
+ALTER TABLE repos ADD COLUMN tags TEXT;
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY,
     repo_id INTEGER NOT NULL REFERENCES repos(id),
@@ -78,6 +76,8 @@ pub struct RepoSummary {
     /// several times larger and would not reconcile with the total.
     pub disk_bytes: i64,
     pub pushed_at: String,
+    /// Comma-separated labels, empty when untagged.
+    pub tags: String,
     /// Language holding the most indexed bytes. Derived from what was actually
     /// kept, not GitHub's label, so it reflects the code in the corpus after
     /// filtering.
@@ -488,7 +488,7 @@ impl Store {
         let mut statement = self.db.prepare(
             "SELECT r.name, COALESCE(r.commit_sha, ''), COALESCE(r.indexed_at, ''), \
              COUNT(d.id), COALESCE(SUM(d.raw_size), 0), COALESCE(SUM(d.length), 0), \
-             COALESCE(r.pushed_at, ''), \
+             COALESCE(r.pushed_at, ''), COALESCE(r.tags, ''), \
              COALESCE(( \
                  SELECT language FROM documents \
                  WHERE repo_id = r.id AND offset >= 0 \
@@ -507,7 +507,8 @@ impl Store {
                     source_bytes: row.get(4)?,
                     disk_bytes: row.get(5)?,
                     pushed_at: row.get(6)?,
-                    language: row.get(7)?,
+                    tags: row.get(7)?,
+                    language: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -544,6 +545,59 @@ impl Store {
             Some(id) => Ok(Some(self.read_document(id)?)),
             None => Ok(None),
         }
+    }
+
+    /// Attach labels to a repository, keeping any it already had.
+    ///
+    /// Tags are stored as a comma-wrapped string (`,a,b,`) so a LIKE query can
+    /// match a whole tag without matching a prefix of a longer one.
+    pub fn tag_repo(&mut self, repo: &str, tags: &[String]) -> Result<bool> {
+        let existing: String = self
+            .db
+            .query_row(
+                "SELECT COALESCE(tags, '') FROM repos WHERE name = ?1",
+                params![repo],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let mut all: Vec<String> = existing
+            .split(',')
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+        for tag in tags {
+            let tag = tag.trim().to_lowercase();
+            if !tag.is_empty() && !all.contains(&tag) {
+                all.push(tag);
+            }
+        }
+        let updated = self.db.execute(
+            "UPDATE repos SET tags = ?1 WHERE name = ?2",
+            params![all.join(","), repo],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Repositories carrying a tag, or all of them when `tag` is None.
+    pub fn repos_tagged(&self, tag: Option<&str>) -> Result<Vec<RepoSummary>> {
+        let all = self.list_repos()?;
+        let Some(tag) = tag else { return Ok(all) };
+        let tag = tag.trim().to_lowercase();
+        Ok(all
+            .into_iter()
+            .filter(|r| r.tags.split(',').any(|t| t == tag))
+            .collect())
+    }
+
+    /// Every tag in use, with how many repositories carry it.
+    pub fn tag_counts(&self) -> Result<Vec<(String, usize)>> {
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        for repo in self.list_repos()? {
+            for tag in repo.tags.split(',').filter(|t| !t.is_empty()) {
+                *counts.entry(tag.to_string()).or_default() += 1;
+            }
+        }
+        Ok(counts.into_iter().collect())
     }
 
     /// Forget a repository. Its blob bytes stay until the corpus is rebuilt,
