@@ -155,21 +155,20 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             .first()
             .map(|item| is_stale(&item.pushed_at))
             .unwrap_or(false);
-        out.push_str(&format!(
-            "\nRepo: {}{}\n",
-            key.0,
-            if stale { "  (last commit " } else { "" }
-        ));
-        if stale {
-            // Close the marker with the actual date, so it is checkable.
-            let date = items
+        // One line, not two: `Repo:` and `File:` on separate lines cost a
+        // fifth of the output on a five-result page, and the reader needs the
+        // pair together anyway to fetch the file. Separated by a space rather
+        // than a slash, because `owner/name/a/b.rs` gives a reader no way to
+        // tell where the repository ends and the path begins.
+        let date = if stale {
+            items
                 .first()
-                .map(|i| i.pushed_at.chars().take(10).collect::<String>())
-                .unwrap_or_default();
-            out.truncate(out.len() - 1);
-            out.push_str(&format!("{date})\n"));
-        }
-        out.push_str(&format!("File: {}\n", key.1));
+                .map(|i| format!("  (last commit {})", &i.pushed_at[..10.min(i.pushed_at.len())]))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("\n{} {}{date}\n", key.0, key.1));
         for item in items {
             // A gutter of real line numbers lets the agent cite an exact
             // location and lets a person scroll straight to it.
@@ -184,9 +183,17 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             if !item.scope.is_empty() && !scope_shown {
                 out.push_str(&format!("  in {}\n", item.scope));
             }
-            let width = (start + item.context.len()).to_string().len();
-            for (offset, line) in item.context.iter().enumerate() {
-                let number = start + offset;
+            // Trim blank lines from the edges of the window. They cost a
+            // gutter each and say nothing; a blank line between two matched
+            // lines is kept, since it is part of the shape of the code.
+            let first = item.context.iter().position(|l| !l.trim().is_empty());
+            let last = item.context.iter().rposition(|l| !l.trim().is_empty());
+            let (Some(first), Some(last)) = (first, last) else {
+                continue;
+            };
+            let width = (start + last).to_string().len();
+            for (offset, line) in item.context[first..=last].iter().enumerate() {
+                let number = start + first + offset;
                 let marker = if number == item.line_number { ">" } else { " " };
                 out.push_str(&format!(
                     "{marker} {number:>width$} \u{2502} {}\n",
