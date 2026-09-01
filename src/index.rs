@@ -104,8 +104,14 @@ pub fn rebuild(store: &mut Store, progress: &mut dyn FnMut(usize, usize)) -> Res
     build_from(store, 0, true, progress)
 }
 
-fn read_marker(store: &Store, key: &str) -> Result<i64> {
-    let raw: Option<Vec<u8>> = store
+/// A numeric marker from the meta table, 0 when unset.
+///
+/// Written as a blob, but read as whatever is there: a marker that has been
+/// touched by hand or by a migration comes back as text, and reading only
+/// one type turned that into "nothing is indexed" and a full rebuild.
+pub fn read_marker(store: &Store, key: &str) -> Result<i64> {
+    use rusqlite::types::Value;
+    let raw: Option<Value> = store
         .db
         .query_row(
             "SELECT value FROM meta WHERE key = ?1",
@@ -113,10 +119,12 @@ fn read_marker(store: &Store, key: &str) -> Result<i64> {
             |row| row.get(0),
         )
         .ok();
-    Ok(raw
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| text.parse().ok())
-        .unwrap_or(0))
+    Ok(match raw {
+        Some(Value::Integer(number)) => number,
+        Some(Value::Text(text)) => text.trim().parse().unwrap_or(0),
+        Some(Value::Blob(bytes)) => String::from_utf8_lossy(&bytes).trim().parse().unwrap_or(0),
+        _ => 0,
+    })
 }
 
 /// Buffered posting entries before the batch is written out.

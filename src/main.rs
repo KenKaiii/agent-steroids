@@ -273,6 +273,39 @@ fn truncate(text: &str, width: usize) -> String {
         + "\u{2026}"
 }
 
+/// Bring the trigram index up to date, reporting on stderr.
+///
+/// Every command that changes the corpus ends here rather than printing
+/// "next: steroids index". That hint was the single worst trap for an agent:
+/// one that ran `add` and searched straight away was told the topic was
+/// absent from the corpus and sent off to discover more repositories, when
+/// the code was sitting there unindexed. An incremental run is near instant
+/// for one repository and a couple of minutes after a full starter ingest,
+/// and either is cheaper than a wrong answer.
+fn run_index(store: &mut Store, rebuild: bool) -> Result<()> {
+    let builder = if rebuild {
+        index::rebuild
+    } else {
+        index::build
+    };
+    // Carriage-return progress is for a terminal. Captured by an agent or a
+    // log it is hundreds of lines saying nothing.
+    let live = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let stats = builder(store, &mut |done, total| {
+        if live {
+            eprint!("\r  indexing {done}/{total}");
+            let _ = std::io::stderr().flush();
+        }
+    })?;
+    eprintln!(
+        "\r  indexed: {} documents, {} trigrams stored ({} too common)   ",
+        stats.documents,
+        stats.trigrams_stored,
+        stats.trigrams_seen - stats.trigrams_stored
+    );
+    Ok(())
+}
+
 fn human(bytes: f64) -> String {
     for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("KB", 1e3)] {
         if bytes >= scale {
@@ -347,10 +380,12 @@ fn main() -> Result<()> {
                 }
                 eprintln!("  tagged: {}", tag.join(", "));
             }
+            // The repositories that did land are indexed even when others
+            // failed, or a partial batch would leave what worked unsearchable.
+            run_index(&mut store, false)?;
             if failures > 0 {
                 std::process::exit(1);
             }
-            eprintln!("  next: steroids index");
         }
 
         Command::Update => {
@@ -405,31 +440,10 @@ fn main() -> Result<()> {
             if reclaimed > 0 {
                 eprintln!("  reclaimed {}", human(reclaimed as f64));
             }
-            eprintln!("  next: steroids index");
+            run_index(&mut store, false)?;
         }
 
-        Command::Index { rebuild } => {
-            let builder = if rebuild {
-                index::rebuild
-            } else {
-                index::build
-            };
-            // Carriage-return progress is for a terminal. Captured by an agent
-            // or a log it is hundreds of lines saying nothing.
-            let live = std::io::IsTerminal::is_terminal(&std::io::stderr());
-            let stats = builder(&mut store, &mut |done, total| {
-                if live {
-                    eprint!("\r  indexing {done}/{total}");
-                    let _ = std::io::stderr().flush();
-                }
-            })?;
-            eprintln!(
-                "\r  {} documents, {} trigrams stored ({} too common)   ",
-                stats.documents,
-                stats.trigrams_stored,
-                stats.trigrams_seen - stats.trigrams_stored
-            );
-        }
+        Command::Index { rebuild } => run_index(&mut store, rebuild)?,
 
         Command::Search {
             pattern,
@@ -510,20 +524,23 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let matches = search::search(&mut store, &pattern, &query)?;
+            let unindexed = search::unindexed(&store)?;
             if json {
                 let facts;
                 println!(
                     "{}",
                     if matches.is_empty() {
                         facts = search::diagnose(&mut store, &pattern)?;
-                        render::render_empty_json(&facts, &pattern)
+                        render::render_empty_json(&facts, &pattern, &unindexed)
                     } else {
-                        render::render_matches_json(&matches, &pattern)
+                        render::render_matches_json(&matches, &pattern, &unindexed)
                     }
                 );
             } else if matches.is_empty() {
+                print!("{}", render::unindexed_note(&unindexed));
                 println!("{}", render_empty(&search::diagnose(&mut store, &pattern)?));
             } else {
+                print!("{}", render::unindexed_note(&unindexed));
                 print!(
                     "{}",
                     render::render_matches_within(
@@ -571,20 +588,23 @@ fn main() -> Result<()> {
                 ..Query::new(limit)
             };
             let matches = search::search(&mut store, &pattern, &query)?;
+            let unindexed = search::unindexed(&store)?;
             if json {
                 let facts;
                 println!(
                     "{}",
                     if matches.is_empty() {
                         facts = search::diagnose(&mut store, &escaped)?;
-                        render::render_empty_json(&facts, &symbol)
+                        render::render_empty_json(&facts, &symbol, &unindexed)
                     } else {
-                        render::render_matches_json(&matches, &symbol)
+                        render::render_matches_json(&matches, &symbol, &unindexed)
                     }
                 );
             } else if matches.is_empty() {
+                print!("{}", render::unindexed_note(&unindexed));
                 println!("{}", render_empty(&search::diagnose(&mut store, &escaped)?));
             } else {
+                print!("{}", render::unindexed_note(&unindexed));
                 print!(
                     "{}",
                     render_matches(
@@ -715,7 +735,7 @@ fn main() -> Result<()> {
         Command::Remove { repo } => {
             if store.remove_repo(&repo)? {
                 println!("  removed {repo}");
-                eprintln!("  next: steroids index");
+                run_index(&mut store, false)?;
             } else {
                 println!("  not in corpus: {repo}");
                 std::process::exit(1);
@@ -804,7 +824,7 @@ fn main() -> Result<()> {
                     }
                     eprintln!("  tagged: {}", tag.join(", "));
                 }
-                eprintln!("  next: steroids index");
+                run_index(&mut store, false)?;
                 if failures == names.len() {
                     std::process::exit(1);
                 }
@@ -870,7 +890,7 @@ fn main() -> Result<()> {
                 stale.len(),
                 human(reclaimed as f64)
             );
-            eprintln!("  next: steroids index");
+            run_index(&mut store, false)?;
         }
 
         Command::Config { key, value } => {
@@ -1022,9 +1042,10 @@ fn main() -> Result<()> {
         }
 
         Command::Compact => {
+            // Compaction moves bytes, not document ids, so the index stays
+            // valid and nothing needs re-running.
             let reclaimed = store.compact()?;
             println!("  reclaimed {}", human(reclaimed as f64));
-            eprintln!("  next: steroids index");
         }
 
         Command::Stats => {

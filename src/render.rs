@@ -6,7 +6,7 @@
 use crate::search::{Diagnosis, Facts, Match, SearchResults};
 
 /// Machine-readable results, for callers that parse rather than read.
-pub fn render_matches_json(results: &SearchResults, pattern: &str) -> String {
+pub fn render_matches_json(results: &SearchResults, pattern: &str, unindexed: &[String]) -> String {
     let matches: &[Match] = results;
     let items: Vec<serde_json::Value> = matches
         .iter()
@@ -30,13 +30,18 @@ pub fn render_matches_json(results: &SearchResults, pattern: &str) -> String {
         // The text output says so in its header; without it here an agent
         // reading JSON cannot tell a complete answer from a capped one.
         "more_available": results.more_available,
+        // Repositories that could not have appeared above, whatever they hold.
+        // A count plus a few names: the full list of a corpus that was never
+        // indexed is hundreds of lines nobody asked for.
+        "unindexed_count": unindexed.len(),
+        "unindexed_repositories": &unindexed[..unindexed.len().min(UNINDEXED_SHOWN)],
         "matches": items,
     }))
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
 }
 
 /// Machine-readable explanation of an empty result set.
-pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
+pub fn render_empty_json(facts: &Facts, pattern: &str, unindexed: &[String]) -> String {
     let reason = match &facts.diagnosis {
         Diagnosis::EmptyCorpus => "empty_corpus",
         Diagnosis::NearMiss { .. } => "near_miss",
@@ -61,9 +66,42 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
         "suggestion": suggestion,
         "repositories": facts.repos,
         "languages": facts.languages,
-        "advice": render_empty(facts),
+        "unindexed_count": unindexed.len(),
+        "unindexed_repositories": &unindexed[..unindexed.len().min(UNINDEXED_SHOWN)],
+        "advice": format!("{}{}", unindexed_note(unindexed), render_empty(facts)),
     }))
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
+}
+
+/// One line telling the reader which repositories a result cannot include.
+///
+/// Empty when everything is indexed, which is the normal case. Names are
+/// listed up to a handful so the agent can recognise the one it just added,
+/// and the fix is spelled out because the alternative is a wild goose chase
+/// through `discover`.
+/// How many unindexed repository names an answer carries by name.
+const UNINDEXED_SHOWN: usize = 5;
+
+pub fn unindexed_note(unindexed: &[String]) -> String {
+    if unindexed.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = unindexed
+        .iter()
+        .take(UNINDEXED_SHOWN)
+        .map(String::as_str)
+        .collect();
+    let more = if unindexed.len() > shown.len() {
+        format!(" and {} more", unindexed.len() - shown.len())
+    } else {
+        String::new()
+    };
+    format!(
+        "Note: {} repositories are not yet indexed and cannot appear here ({}{more}). \
+         Run `steroids index` first.\n\n",
+        unindexed.len(),
+        shown.join(", ")
+    )
 }
 
 /// Rough token count for a block of code.
@@ -253,7 +291,7 @@ pub fn render_empty(facts: &Facts) -> String {
              variations. Fill the gap instead:\n\
              \x20 1. Find candidates:  steroids discover '<topic or language>' --limit 20\n\
              \x20 2. Tell the user what you found and why it fits their project\n\
-             \x20 3. With their go-ahead: steroids add <repos> --tag <label> && steroids index\n\
+             \x20 3. With their go-ahead: steroids add <repos> --tag <label>\n\
              \x20 4. Re-run this search\n\n\
              If you cannot reach GitHub, ask the user for repository names that solve \
              this problem and add those."

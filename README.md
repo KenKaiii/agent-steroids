@@ -89,7 +89,7 @@ Install Agent Steroids for me: https://github.com/KenKaiii/agent-steroids
 Then look at what I am building and curate a corpus for it:
   - Use `steroids discover` to find well starred, actively maintained repos
     that solve similar problems
-  - Index around 20 of them, then run `steroids index`
+  - Add around 20 of them with `steroids add`
   - Show me what you added and how much space it used
 ```
 
@@ -123,7 +123,6 @@ That's it. No plugin, no server. Your agent calls it the same way it calls `grep
 ```bash
 curl -O https://raw.githubusercontent.com/KenKaiii/agent-steroids/main/starter-repos.txt
 steroids add --from-file starter-repos.txt
-steroids index
 ```
 
 TypeScript, Python, Rust, Go, React, Next.js, AI agents, RAG, MCP, databases, DevOps, security, mobile, game dev. Thirty categories. Every repo was checked: not archived, not a fork, committed to within the last year, well starred.
@@ -138,7 +137,7 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 |---|---|
 | `steroids` | The full interface. Browse repos, search as you type |
 | `steroids add <repo>` | Add a repo. Pasting a GitHub URL works too |
-| `steroids index` | Run this after adding. Makes it all searchable |
+| `steroids index` | Runs by itself after every add, update and remove. `--rebuild` starts the index over |
 | `steroids discover 'topic:ai-agents'` | Finds good repos for you. Add `--add` to take them |
 | `steroids search '<regex>'` | What your agent calls. Results spread across projects |
 | `steroids recent --hours 72` | What these projects shipped in the last 3 days |

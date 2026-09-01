@@ -67,6 +67,10 @@ ok "tag an unknown repo"       1 "not in corpus"              -- "$BIN" tag --ad
 echo
 echo "=== a real repository, end to end ==="
 ok "add"                       0 "files kept"    -- "$BIN" add antirez/smallchat
+# add indexes before it returns. Searching straight after used to be told the
+# topic was absent and to go discover repositories, with the code sitting
+# there unindexed; that was the single worst trap for an agent.
+ok "searchable right after add" 0 "match(es)"     -- "$BIN" search "listen" --repo antirez/smallchat
 ok "index"                     0 "documents"     -- "$BIN" index
 ok "repos lists it"            0 "smallchat"     -- "$BIN" repos
 # The dominant language is stored rather than derived, so a listing after an

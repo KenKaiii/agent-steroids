@@ -647,6 +647,25 @@ pub struct Facts {
     pub languages: Vec<String>,
 }
 
+/// Repositories holding documents the trigram index has not seen.
+///
+/// Every write command indexes before it returns, so this is normally empty;
+/// it catches an interrupted run, or a corpus written by an older build. Read
+/// only past the index high-water mark, so it costs nothing on a corpus that
+/// is up to date.
+pub fn unindexed(store: &Store) -> Result<Vec<String>> {
+    let upto = crate::index::read_marker(store, "indexed_upto")?;
+    let names = store
+        .db
+        .prepare(
+            "SELECT DISTINCT r.name FROM documents d JOIN repos r ON r.id = d.repo_id \
+             WHERE d.offset >= 0 AND d.id > ?1 ORDER BY r.name",
+        )?
+        .query_map(params![upto], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(names)
+}
+
 /// Explain why a search found nothing.
 ///
 /// The agent should act differently per cause: index repositories (empty
