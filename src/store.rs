@@ -149,7 +149,17 @@ impl Store {
                 // since nothing is ever stored in it.
                 .truncate(false)
                 .open(root.join("write.lock"))?;
-            lock_exclusive(&file)?;
+            // Try without waiting first, so a second writer can say what it is
+            // waiting for. Blocking silently looked like a hang: an agent that
+            // runs `add` while an index is rebuilding sees nothing for
+            // minutes and has no way to tell a wait from a crash.
+            if !lock_exclusive(&file, false)? {
+                eprintln!(
+                    "  another steroids process is writing to {}; waiting for it to finish",
+                    root.display()
+                );
+                lock_exclusive(&file, true)?;
+            }
             Some(file)
         } else {
             None
@@ -558,7 +568,7 @@ impl Store {
         let temporary = self
             .blob_path
             .with_extension(format!("compacting.{generation}"));
-        let mut output = File::create(&temporary)?;
+        let mut output = std::io::BufWriter::with_capacity(1 << 20, File::create(&temporary)?);
         let mut moves: Vec<(i64, u64, usize)> = Vec::with_capacity(live.len());
         let mut offset = 0u64;
         for doc_id in live {
@@ -575,10 +585,18 @@ impl Store {
                      the corpus was left untouched"
                 )
             })?;
-            output.write_all(&packed)?;
+            // A full disk fails here, before the database has been touched.
+            // The partial file is removed by the next writer to open.
+            output.write_all(&packed).context(
+                "writing the compacted blob file; the corpus was left untouched",
+            )?;
             moves.push((doc_id, offset, packed.len()));
             offset += packed.len() as u64;
         }
+        let output = output
+            .into_inner()
+            .map_err(|error| error.into_error())
+            .context("writing the compacted blob file; the corpus was left untouched")?;
         output.sync_all()?;
         drop(output);
         // Every byte is now in the new file. Only past this point does the
@@ -927,20 +945,25 @@ impl Store {
 /// it. The lock releases automatically when the file handle closes, including
 /// on a crash, so a killed ingest cannot leave the corpus permanently locked.
 #[cfg(unix)]
-fn lock_exclusive(file: &File) -> Result<()> {
+fn lock_exclusive(file: &File, wait: bool) -> Result<bool> {
     use std::os::unix::io::AsRawFd;
     unsafe extern "C" {
         fn flock(fd: i32, operation: i32) -> i32;
     }
     const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    const EWOULDBLOCK: i32 = 11;
+    let operation = if wait { LOCK_EX } else { LOCK_EX | LOCK_NB };
     // SAFETY: the descriptor is owned by `file` and valid for this call.
-    if unsafe { flock(file.as_raw_fd(), LOCK_EX) } != 0 {
-        bail!(
-            "could not lock the corpus for writing: {}",
-            std::io::Error::last_os_error()
-        );
+    if unsafe { flock(file.as_raw_fd(), operation) } != 0 {
+        let error = std::io::Error::last_os_error();
+        // EAGAIN on Linux, EWOULDBLOCK (35) on the BSDs and macOS.
+        if !wait && matches!(error.raw_os_error(), Some(EWOULDBLOCK) | Some(35)) {
+            return Ok(false);
+        }
+        bail!("could not lock the corpus for writing: {error}");
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Windows equivalent, via `LockFileEx`.
@@ -950,7 +973,7 @@ fn lock_exclusive(file: &File) -> Result<()> {
 /// once. A platform without the lock is a platform where that happens
 /// silently, so this blocks the same way `flock` does.
 #[cfg(windows)]
-fn lock_exclusive(file: &File) -> Result<()> {
+fn lock_exclusive(file: &File, wait: bool) -> Result<bool> {
     use std::os::windows::io::AsRawHandle;
 
     #[repr(C)]
@@ -973,6 +996,13 @@ fn lock_exclusive(file: &File) -> Result<()> {
         ) -> i32;
     }
     const EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+    const FAIL_IMMEDIATELY: u32 = 0x0000_0001;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    let flags = if wait {
+        EXCLUSIVE_LOCK
+    } else {
+        EXCLUSIVE_LOCK | FAIL_IMMEDIATELY
+    };
 
     let mut overlapped = Overlapped {
         internal: 0,
@@ -986,7 +1016,7 @@ fn lock_exclusive(file: &File) -> Result<()> {
     let locked = unsafe {
         LockFileEx(
             file.as_raw_handle(),
-            EXCLUSIVE_LOCK,
+            flags,
             0,
             u32::MAX,
             u32::MAX,
@@ -994,18 +1024,19 @@ fn lock_exclusive(file: &File) -> Result<()> {
         )
     };
     if locked == 0 {
-        bail!(
-            "could not lock the corpus for writing: {}",
-            std::io::Error::last_os_error()
-        );
+        let error = std::io::Error::last_os_error();
+        if !wait && error.raw_os_error() == Some(ERROR_LOCK_VIOLATION) {
+            return Ok(false);
+        }
+        bail!("could not lock the corpus for writing: {error}");
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Anything that is neither Unix nor Windows. Refuses rather than pretending,
 /// because a silent no-op here is corruption waiting to happen.
 #[cfg(not(any(unix, windows)))]
-fn lock_exclusive(_file: &File) -> Result<()> {
+fn lock_exclusive(_file: &File, _wait: bool) -> Result<bool> {
     bail!("this platform has no file locking, so writing a corpus is unsafe")
 }
 
