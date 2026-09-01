@@ -71,7 +71,6 @@ pub struct IndexStats {
     pub trigrams_stored: usize,
 }
 
-/// (Re)build postings for every stored document.
 /// Build or extend the trigram index.
 ///
 /// Incremental by default. Document ids only ever increase, so anything added
@@ -132,6 +131,31 @@ fn read_marker(store: &Store, key: &str) -> Result<i64> {
 /// more re-encoding of the long lists that span every batch.
 const FLUSH_THRESHOLD: usize = 128_000_000;
 
+/// Drop the index and the two markers that describe it, atomically.
+///
+/// Both markers outlive the postings they describe unless they go with them,
+/// and a rebuild that is interrupted between the delete and the first batch
+/// leaves whatever they said standing.
+///
+/// indexed_upto would point past an index that no longer exists, so the next
+/// run extends nothing and searches a near empty index without complaint.
+///
+/// stale_postings would keep a count over the rebuild threshold, sending the
+/// next run straight back to a full rebuild: a corpus too large to index in one
+/// sitting would restart forever rather than resume. Nothing is stale once the
+/// postings are gone.
+fn clear_index(store: &Store) -> Result<()> {
+    let transaction = store.db.unchecked_transaction()?;
+    transaction.execute("DELETE FROM postings", [])?;
+    transaction.execute(
+        "INSERT OR REPLACE INTO meta (key, value) \
+         VALUES ('indexed_upto', ?1), ('stale_postings', ?1)",
+        params![b"0".to_vec()],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn build_from(
     store: &mut Store,
     after: i64,
@@ -142,14 +166,7 @@ fn build_from(
     // what was live at the last index against what still is.
     let stale_before = read_marker(store, "stale_postings")?;
     if full {
-        store.db.execute("DELETE FROM postings", [])?;
-        // The postings this pointed at are gone. Left as it was, an
-        // interruption before the first batch would leave the next run
-        // extending an index that no longer exists.
-        store.db.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('indexed_upto', ?1)",
-            params![b"0".to_vec()],
-        )?;
+        clear_index(store)?;
     }
 
     let doc_ids: Vec<i64> = store
@@ -425,6 +442,49 @@ mod tests {
     }
 
     use super::*;
+
+    /// Clearing the index clears what describes it, in the same breath.
+    ///
+    /// This is the state an interrupted rebuild leaves behind, so it is checked
+    /// on its own: a completed rebuild rewrites both markers at the end and
+    /// would mask the difference.
+    #[test]
+    fn clearing_the_index_clears_the_markers_that_describe_it() -> Result<()> {
+        let dir = crate::store::scratch_dir("markers");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = crate::store::Store::open_for_write(&dir)?;
+        let mut noop = |_: usize, _: usize| {};
+
+        let id = store.add_repo("a/one", &crate::fetch::Upstream::default())?;
+        for i in 0..20 {
+            let body = format!("fn handler_{i}() {{ retry_count({i}); }}\n");
+            store.add_document(id, &format!("f{i}.rs"), "rust", body.into_bytes())?;
+        }
+        store.flush_pending()?;
+        super::build(&mut store, &mut noop)?;
+
+        // What an earlier run concluded about staleness describes postings that
+        // are about to be deleted.
+        store.db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('stale_postings', ?1)",
+            params![b"999".to_vec()],
+        )?;
+        assert!(read_marker(&store, "indexed_upto")? > 0);
+
+        clear_index(&store)?;
+
+        assert_eq!(read_marker(&store, "indexed_upto")?, 0);
+        assert_eq!(read_marker(&store, "stale_postings")?, 0);
+
+        // A rebuild from that state still produces a working index.
+        super::rebuild(&mut store, &mut noop)?;
+        let hits =
+            crate::search::search(&mut store, "retry_count", &crate::search::Query::new(100))?;
+        assert_eq!(hits.matches.len(), 20);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 
     #[test]
     fn varint_round_trips() -> Result<()> {
