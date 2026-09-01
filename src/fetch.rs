@@ -155,17 +155,30 @@ fn have_token() -> bool {
 
 /// A server that accepts the connection and then stalls would otherwise block
 /// forever, and in a bulk ingest one such repository holds up the whole batch.
-/// Generous enough for a large archive on a slow line, short enough that a dead
-/// host is skipped rather than waited on.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
+///
+/// The body gets its own, far longer budget. Sizing them together kills
+/// exactly the repositories most worth having: ClickHouse is a 354MB archive,
+/// and at `--parallel 24` it shares bandwidth with twenty-three others, so a
+/// minute-long deadline drops it while small repositories sail through.
+/// Only the connection and the body are bounded. `timeout_recv_response` looks
+/// like the right guard for a stalled server, but in ureq 3.4 it spans the
+/// body too, so any value large enough for ClickHouse is useless for detecting
+/// a stall, and any value small enough to detect one drops ClickHouse.
+/// Short, because a host that has not completed a TCP handshake in this long
+/// is not going to. Across 50,000 repositories a generous connect timeout is
+/// the difference between an update that finishes and one that spends hours
+/// waiting on hosts that are simply gone.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Enough for the largest repository on a poor connection while still
+/// releasing a worker that has genuinely stalled.
+const BODY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
             .timeout_connect(Some(CONNECT_TIMEOUT))
-            .timeout_global(Some(RESPONSE_TIMEOUT))
+            .timeout_recv_body(Some(BODY_TIMEOUT))
             .build()
             .into()
     })

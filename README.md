@@ -273,9 +273,14 @@ steroids stats       # see what it costs you
 
 `update` checks each repo's latest commit first and only downloads the ones
 that actually moved, so running it daily on a big corpus costs almost nothing.
-Measured on 485 repositories: **2m50s**, of which 465 were already current and
-skipped entirely. No API quota is used, so there is no limit on how many repos
-you update or how often.
+Measured on 98 repositories with nothing changed upstream: **5.5 seconds**.
+That is one small request each, so the cost scales with how many repositories
+you have rather than how big they are: roughly 45 minutes for 50,000. No API
+quota is involved, so there is no ceiling on how many you update or how often.
+
+A repository that fails, because it was renamed, deleted, or the connection
+dropped, is reported and skipped. Everything else still lands, and re-running
+the same command retries only what is missing.
 Adding a repo you already have is skipped too, whether you paste the name or
 the full URL.
 
