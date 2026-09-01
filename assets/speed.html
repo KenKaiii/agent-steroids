@@ -2,140 +2,190 @@
 <!--
 Source for assets/speed.png. After editing, regenerate with:
 
-  npx playwright screenshot --viewport-size=1280,470 \
+  npx playwright screenshot --viewport-size=1280,460 \
     assets/speed.html assets/speed.png
 
+Needs network on regeneration: the type pairing loads from Google Fonts.
+Palette and type scale are shared with assets/before-after.html.
 Figures must match the benchmark table in README.md.
 -->
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --surface:      #080c0e;
+    --surface-up:   #0e1417;
+    --line:         #1d272c;
+    --ink:          #f2f7f8;
+    --ink-muted:    #93a3aa;
+    --ink-faint:    #758990;
+    --accent:       #22d3ee;
+    --on-accent:    #04161b;
+
+    --step: 22px;
+    --radius: 8px;
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
     width: 1280px;
-    height: 470px;
-    background: #0b0d12;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    height: 460px;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: Inter, sans-serif;
+    -webkit-font-smoothing: antialiased;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    position: relative;
   }
 
-  .grid {
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
-    background-size: 44px 44px;
-  }
-  .glow {
-    position: absolute;
-    width: 560px; height: 560px;
-    left: -170px; bottom: -240px;
-    border-radius: 50%;
-    filter: blur(100px);
-    background: rgba(34,211,238,.15);
-  }
-
-  .stage { position: relative; z-index: 2; width: 1120px; }
+  .stage { width: 1180px; }
 
   .title {
-    font-size: 30px;
-    font-weight: 800;
-    color: #f1f5f9;
-    letter-spacing: -.02em;
+    font-size: 29px;
+    font-weight: 700;
+    letter-spacing: -.021em;
+    line-height: 1.2;
   }
   .sub {
     margin-top: 8px;
-    font-size: 17px;
-    color: #7c8798;
-    margin-bottom: 40px;
+    font-size: 16px;
+    line-height: 1.4;
+    color: var(--ink-muted);
   }
 
-  .row { display: flex; align-items: center; margin-bottom: 26px; }
+  .chart {
+    margin-top: calc(var(--step) * 1.6);
+    padding-top: calc(var(--step) * 1.3);
+    border-top: 1px solid var(--line);
+  }
+
+  .row { display: flex; align-items: center; }
+  .row + .row { margin-top: var(--step); }
+
   .name {
-    width: 245px;
-    font-size: 19px;
-    font-weight: 700;
-    color: #8b96a7;
+    width: 236px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.25;
+    color: var(--ink-muted);
     padding-right: 20px;
   }
-  .name.us { color: #22d3ee; }
+  .name.us { color: var(--ink); }
+  .name svg { flex: none; color: var(--ink-faint); }
+  .name.us svg { color: var(--accent); }
 
-  .track { flex: 1; display: flex; align-items: center; gap: 16px; }
+  .track { flex: 1; display: flex; align-items: center; gap: 18px; }
 
   .bar {
-    height: 40px;
-    border-radius: 10px;
-    background: rgba(255,255,255,.07);
-    border: 1px solid rgba(255,255,255,.09);
+    height: 38px;
+    border-radius: var(--radius);
+    background: var(--surface-up);
+    border: 1px solid var(--line);
   }
-  .bar.us {
-    background: linear-gradient(100deg, #22d3ee, #a855f7);
-    border: none;
-    box-shadow: 0 0 34px rgba(34,211,238,.45);
-  }
+  /* The single accent fill in the image: the number we want read first. */
+  .bar.us { background: var(--accent); border-color: var(--accent); }
 
   .val {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 19px;
-    font-weight: 700;
-    color: #8b96a7;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 18px;
+    line-height: 1.25;
+    color: var(--ink-muted);
     white-space: nowrap;
   }
-  .val.us { color: #22d3ee; }
-  .val small { display: block; font-family: inherit; font-size: 13px; font-weight: 400; color: #5f6b7d; margin-top: 3px; }
+  .val.us { color: var(--accent); }
+  .val small {
+    display: block;
+    font-size: 13px;
+    line-height: 1.3;
+    color: var(--ink-faint);
+    margin-top: 4px;
+  }
 
   .foot {
-    margin-top: 42px;
+    margin-top: calc(var(--step) * 1.6);
+    padding-top: calc(var(--step) * 1.3);
+    border-top: 1px solid var(--line);
     display: flex;
-    gap: 12px;
+    gap: 40px;
   }
-  .chip {
+  .claim {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 16px;
-    color: #cbd5e1;
-    background: rgba(255,255,255,.045);
-    border: 1px solid rgba(255,255,255,.10);
-    border-radius: 999px;
-    padding: 11px 22px;
+    line-height: 1.25;
+    color: var(--ink-muted);
   }
-  .chip b { color: #22d3ee; font-weight: 700; }
+  .claim svg { flex: none; color: var(--accent); }
+  .claim b { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
-  <div class="grid"></div>
-  <div class="glow"></div>
-
   <div class="stage">
-    <div class="title">Your agent wants 30 code samples before it writes a function</div>
+
+    <div class="title">Your agent wants 30 examples before it writes a function</div>
     <div class="sub">Same searches, same queries, measured the same way.</div>
 
-    <div class="row">
-      <div class="name us">Agent Steroids</div>
-      <div class="track">
-        <div class="bar us" style="width: 26px"></div>
-        <div class="val us">0.3 seconds<small>on your own disk</small></div>
+    <div class="chart">
+      <div class="row">
+        <div class="name us">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          Agent Steroids
+        </div>
+        <div class="track">
+          <div class="bar us" style="width: 24px"></div>
+          <div class="val us">0.3 seconds<small>on your own disk</small></div>
+        </div>
       </div>
-    </div>
 
-    <div class="row">
-      <div class="name">Hosted code search</div>
-      <div class="track">
-        <div class="bar" style="width: 590px"></div>
-        <div class="val">1 to 20 minutes<small>if you dodge the rate limit</small></div>
+      <div class="row">
+        <div class="name">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+          </svg>
+          Hosted code search
+        </div>
+        <div class="track">
+          <div class="bar" style="width: 604px"></div>
+          <div class="val">1 to 20 minutes<small>if you dodge the rate limit</small></div>
+        </div>
       </div>
     </div>
 
     <div class="foot">
-      <span class="chip"><b>No</b> rate limits</span>
-      <span class="chip"><b>No</b> API keys</span>
-      <span class="chip"><b>Works</b> offline</span>
+      <div class="claim">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5"/>
+        </svg>
+        <span><b>No</b> rate limits</span>
+      </div>
+      <div class="claim">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5"/>
+        </svg>
+        <span><b>No</b> API keys</span>
+      </div>
+      <div class="claim">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5"/>
+        </svg>
+        <span><b>Works</b> offline</span>
+      </div>
     </div>
+
   </div>
 </body>
 </html>
