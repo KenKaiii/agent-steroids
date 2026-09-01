@@ -54,7 +54,7 @@ Real projects, downloaded to your machine. Your agent **reads them before it wri
 | Rate limit | **none** | hit within minutes |
 | Works offline | **yes** | no |
 | Costs | **nothing** | account, keys, quotas |
-| What you can search | **repos you chose** | whatever they index |
+| What it can search | **repos you chose** | whatever they index |
 
 Fine for looking something up once. Useless when your agent wants 30 examples before writing a function, which is exactly what you want it doing.
 
@@ -65,7 +65,7 @@ Fine for looking something up once. Useless when your agent wants 30 examples be
 | 40 repos | **145 MB** | fits on a USB stick |
 | 500 repos | **1.8 GB** | the entire starter pack |
 
-90% of every repo gets thrown away. No images, no docs, no lock files. Just the code worth learning from.
+90% of every repo gets thrown away. No images, no docs, no lock files. Your agent can't read any of that anyway. Only the source it needs is kept.
 
 ---
 
@@ -140,10 +140,10 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 | `steroids add <repo>` | Add a repo. Pasting a GitHub URL works too |
 | `steroids index` | Run this after adding. Makes it all searchable |
 | `steroids discover 'topic:ai-agents'` | Finds good repos for you. Add `--add` to take them |
-| `steroids search '<regex>'` | Search everything, results spread across projects |
+| `steroids search '<regex>'` | What your agent calls. Results spread across projects |
 | `steroids recent --hours 72` | What these projects shipped in the last 3 days |
 | `steroids update` | Pull the latest code. 98 repos in 5.5 seconds |
-| `steroids tag --add rust,cli <repo>` | Label repos so you can search just a slice |
+| `steroids tag --add rust,cli <repo>` | Label repos so your agent can search just a slice |
 | `steroids decay` | Auto-drop repos that went quiet. Dry run first |
 | `steroids stats` | What it's costing you in disk |
 
