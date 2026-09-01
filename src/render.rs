@@ -3,10 +3,11 @@
 //! Agent context is the scarce resource, not disk or latency, so every line
 //! printed has to earn its tokens.
 
-use crate::search::{Diagnosis, Facts, Match};
+use crate::search::{Diagnosis, Facts, Match, SearchResults};
 
 /// Machine-readable results, for callers that parse rather than read.
-pub fn render_matches_json(matches: &[Match], pattern: &str) -> String {
+pub fn render_matches_json(results: &SearchResults, pattern: &str) -> String {
+    let matches: &[Match] = results;
     let items: Vec<serde_json::Value> = matches
         .iter()
         .map(|item| {
@@ -26,6 +27,9 @@ pub fn render_matches_json(matches: &[Match], pattern: &str) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "pattern": pattern,
         "count": items.len(),
+        // The text output says so in its header; without it here an agent
+        // reading JSON cannot tell a complete answer from a capped one.
+        "more_available": results.more_available,
         "matches": items,
     }))
     .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"))
@@ -39,6 +43,7 @@ pub fn render_empty_json(facts: &Facts, pattern: &str) -> String {
         Diagnosis::TopicAbsent { .. } => "topic_absent",
         Diagnosis::SpellingMismatch { .. } => "spelling_mismatch",
         Diagnosis::TooBroad => "pattern_too_broad",
+        Diagnosis::CrossLine => "pattern_spans_lines",
     };
     let suggestion = match &facts.diagnosis {
         Diagnosis::NearMiss { nearest, .. } => Some(nearest.clone()),
@@ -258,6 +263,10 @@ pub fn render_empty(facts: &Facts) -> String {
             "No matches. {scope} The pattern has no literal run of 3+ characters to search \
              on; add one, e.g. a function or parameter name."
         ),
+        Diagnosis::CrossLine => "No matches, and this pattern cannot match: it requires a \
+             newline, but matching runs one line at a time. Search for the single line you \
+             want, e.g. 'try:' instead of 'try:\\n'."
+            .to_string(),
     }
 }
 

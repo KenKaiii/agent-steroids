@@ -1,6 +1,6 @@
 //! Query the corpus: narrow with trigrams, confirm with a real regex.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{Result, anyhow, bail};
 use regex::bytes::RegexBuilder;
@@ -515,6 +515,45 @@ pub enum Diagnosis {
     },
     /// Nothing literal to search on.
     TooBroad,
+    /// Every branch demands a newline, which a line-oriented match never sees.
+    CrossLine,
+}
+
+/// Can this pattern only match text that spans a line break?
+///
+/// Matching runs line by line, so `try:\n` finds nothing however much Python
+/// the corpus holds. Left undetected that looks identical to a missing topic,
+/// and the honest answer is the opposite: rewrite the pattern.
+///
+/// Deliberately conservative. A newline inside a character class is ignored
+/// because `[^\n]` asks for the opposite, and one alternative that can match
+/// within a line is enough to make the whole pattern viable.
+pub fn only_matches_across_lines(pattern: &str) -> bool {
+    let branches = alternatives(pattern);
+    !branches.is_empty() && branches.iter().all(|branch| branch_needs_newline(branch))
+}
+
+fn branch_needs_newline(branch: &str) -> bool {
+    let bytes = branch.as_bytes();
+    let mut index = 0usize;
+    let mut in_class = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if index + 1 < bytes.len() => {
+                if !in_class && bytes[index + 1] == b'n' {
+                    return true;
+                }
+                index += 2;
+                continue;
+            }
+            b'[' if !in_class => in_class = true,
+            b']' if in_class => in_class = false,
+            b'\n' if !in_class => return true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 pub struct Facts {
@@ -540,6 +579,16 @@ pub fn diagnose(store: &mut Store, pattern: &str) -> Result<Facts> {
             languages: Vec::new(),
         });
     }
+    // Checked before any probing: the fragments are present and the pattern is
+    // still unmatchable, so probing for them costs a second and misleads.
+    if only_matches_across_lines(pattern) {
+        return Ok(Facts {
+            diagnosis: Diagnosis::CrossLine,
+            repos,
+            languages: Vec::new(),
+        });
+    }
+
     let languages: Vec<String> = store
         .db
         .prepare(
@@ -726,6 +775,46 @@ impl std::ops::Deref for SearchResults {
     }
 }
 
+/// Take `budget` candidates round-robin across repositories.
+///
+/// Order within a repository is preserved, so the cheapest documents for a
+/// repository are still tried first; only the choice of which repositories get
+/// looked at at all changes.
+fn spread_across_repos<T>(rows: Vec<T>, budget: usize, repo_of: fn(&T) -> &str) -> Vec<T> {
+    if rows.len() <= budget {
+        return rows;
+    }
+    let mut order: Vec<String> = Vec::new();
+    let mut by_repo: HashMap<String, VecDeque<T>> = HashMap::new();
+    for row in rows {
+        let repo = repo_of(&row).to_string();
+        match by_repo.get_mut(&repo) {
+            Some(queue) => queue.push_back(row),
+            None => {
+                order.push(repo.clone());
+                by_repo.insert(repo, VecDeque::from([row]));
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(budget);
+    'outer: loop {
+        let mut progressed = false;
+        for repo in &order {
+            if let Some(row) = by_repo.get_mut(repo).and_then(VecDeque::pop_front) {
+                out.push(row);
+                progressed = true;
+                if out.len() >= budget {
+                    break 'outer;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    out
+}
+
 pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchResults> {
     if pattern.len() > MAX_PATTERN_LENGTH {
         bail!("pattern too long");
@@ -739,6 +828,16 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         .case_insensitive(query.ignore_case)
         .build()
         .map_err(|error| anyhow!("invalid pattern: {error}"))?;
+
+    // Scanning a pattern that needs a newline reads every candidate line by
+    // line to prove what the pattern already says: it cannot match. Measured at
+    // 1.7s for `try:\n` against 81,000 candidates, all of it wasted.
+    if only_matches_across_lines(pattern) {
+        return Ok(SearchResults {
+            matches: Vec::new(),
+            more_available: false,
+        });
+    }
 
     // Trigram narrowing is case-sensitive, so it would discard documents that a
     // case-insensitive matcher should still find. Scan everything instead.
@@ -817,8 +916,18 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
             narrowed.as_ref().is_none_or(|set| set.contains(id))
                 && query.path_glob.is_none_or(|glob| glob_matches(glob, path))
         })
-        .take(MAX_CANDIDATES)
         .collect();
+
+    // Spend the candidate budget across projects, not on the first few.
+    //
+    // Rows arrive grouped by repository, so taking the first 20,000 outright
+    // filled the budget from whichever repositories were indexed earliest:
+    // `class \w+Error` has 173,000 candidates and returned hits from 38 of 443
+    // projects, while reporting nothing was missed. Comparing how different
+    // projects solve something is the point of the corpus, so let the cap cost
+    // depth within a project rather than whole projects.
+    let available = rows.len();
+    let rows = spread_across_repos(rows, MAX_CANDIDATES, |row| row.1.as_str());
 
     // Documents come back grouped by repository, so taking the first N matches
     // would fill the whole budget from one project. The point of the corpus is
@@ -832,7 +941,9 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let mut by_repo: HashMap<String, Vec<Match>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut collected = 0usize;
-    let mut truncated = false;
+    // Candidates dropped by the cap are results the caller never saw. Left
+    // unreported, a partial answer is indistinguishable from a complete one.
+    let mut truncated = available > rows.len();
 
     let mut scanned = 0usize;
     // Commit sha and last-commit date, looked up once per repository that
@@ -1245,6 +1356,48 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn candidate_budget_spans_repositories() {
+        // Rows arrive grouped by repository. Taking the first two outright
+        // would never look past "a", which is what hid 216 projects.
+        let rows = vec![
+            (1, "a".to_string()),
+            (2, "a".to_string()),
+            (3, "a".to_string()),
+            (4, "b".to_string()),
+            (5, "c".to_string()),
+        ];
+        let picked = spread_across_repos(rows, 3, |row| row.1.as_str());
+        let repos: Vec<&str> = picked.iter().map(|row| row.1.as_str()).collect();
+        assert_eq!(repos, vec!["a", "b", "c"]);
+        // Within a repository the original order still holds.
+        assert_eq!(picked[0].0, 1);
+    }
+
+    #[test]
+    fn a_budget_that_fits_changes_nothing() {
+        let rows = vec![(1, "a".to_string()), (2, "b".to_string())];
+        assert_eq!(spread_across_repos(rows, 9, |row| row.1.as_str()).len(), 2);
+    }
+
+    #[test]
+    fn newline_patterns_are_recognised_as_unmatchable() {
+        assert!(only_matches_across_lines(r"try:\n"));
+        assert!(only_matches_across_lines("try:\n"));
+        assert!(only_matches_across_lines(r"a\nb|c\nd"));
+    }
+
+    #[test]
+    fn patterns_that_can_match_within_a_line_are_left_alone() {
+        assert!(!only_matches_across_lines(r"def \w+"));
+        // One viable branch is enough for the pattern to be worth running.
+        assert!(!only_matches_across_lines(r"foo|a\nb"));
+        // A negated class asks for the opposite of a newline.
+        assert!(!only_matches_across_lines(r"[^\n]+"));
+        // An escaped backslash before n is a literal, not a line break.
+        assert!(!only_matches_across_lines(r"path\\name"));
+    }
 
     #[test]
     fn literals_ignore_group_contents() {

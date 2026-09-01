@@ -72,6 +72,10 @@ ok "repos lists it"            0 "smallchat"     -- "$BIN" repos
 # The dominant language is stored rather than derived, so a listing after an
 # ingest must still show it: a stale or empty column is silent.
 ok "repos shows the language"  0 "c "            -- "$BIN" repos
+# Matching runs per line, so a newline pattern is unmatchable rather than
+# merely absent. Saying "add more repositories" here sends agents chasing
+# repositories that would never have helped.
+ok "newline pattern explained" 0 "one line at a time" -- "$BIN" search 'try:\n' 
 ok "repos --json"              0 '"repo"'        -- "$BIN" repos --json
 ok "files"                     0 "chat"          -- "$BIN" files antirez/smallchat
 ok "search finds code"         0 "match"         -- "$BIN" search "int main" --limit 2

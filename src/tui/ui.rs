@@ -1,6 +1,6 @@
 //! Drawing. Pure: state in, frame out.
 //!
-//! Deliberately restrained — one accent colour, named colours only so the app
+//! Deliberately restrained: one accent colour, named colours only so the app
 //! stays readable on light and dark terminals, and selection by reversed video
 //! rather than a background colour that may clash with the user's theme.
 
@@ -18,9 +18,9 @@ const ACCENT: Color = Color::Cyan;
 /// One line explaining why a search found nothing, for the results pane.
 pub fn short_diagnosis(facts: &Facts) -> String {
     match &facts.diagnosis {
-        Diagnosis::EmptyCorpus => "No repositories indexed yet — press a to add one.".into(),
+        Diagnosis::EmptyCorpus => "No repositories indexed yet, press a to add one.".into(),
         Diagnosis::NearMiss { nearest, .. } => {
-            format!("No matches. The corpus does contain '{nearest}' — try that.")
+            format!("No matches. The corpus does contain '{nearest}', try that.")
         }
         Diagnosis::TopicAbsent { missing } => {
             format!("No matches. '{missing}' appears in no indexed repository.")
@@ -29,6 +29,9 @@ pub fn short_diagnosis(facts: &Facts) -> String {
             "No matches for this exact pattern. Try a shorter one.".into()
         }
         Diagnosis::TooBroad => "Add a literal of 3+ characters to search on.".into(),
+        Diagnosis::CrossLine => {
+            "Matching runs one line at a time, so a newline never matches.".into()
+        }
     }
 }
 
