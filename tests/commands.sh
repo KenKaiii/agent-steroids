@@ -91,6 +91,8 @@ ok "spaced tag refused"        1 "spaces or commas"  -- "$BIN" tag antirez/small
 ok "tagging nothing fails"     1 "not in corpus"     -- "$BIN" tag nope/nope --add x
 ok "deep bare path refused"    1 "expected owner/name" -- "$BIN" add owner/repo/extra
 ok "repos --json"              0 '"repo"'        -- "$BIN" repos --json
+ok "repos --json counts"       0 '"count"'       -- "$BIN" repos --json
+ok "repos limit 0 refused"     1 "at least 1"    -- "$BIN" repos --limit 0
 ok "files"                     0 "chat"          -- "$BIN" files antirez/smallchat
 ok "search finds code"         0 "match"         -- "$BIN" search "int main" --limit 2
 ok "search --json"             0 '"matches"'     -- "$BIN" search "int main" --json --limit 1

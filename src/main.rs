@@ -173,6 +173,9 @@ enum Command {
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
+        /// Most repositories to list. The rest are counted, not printed
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
     },
     /// Remove a repository from the corpus
     Remove { repo: String },
@@ -692,8 +695,16 @@ fn main() -> Result<()> {
             println!("\n  {} files shown for {repo}", paths.len());
         }
 
-        Command::Repos { tag, json } => {
-            let rows = store.repos_tagged(tag.as_deref())?;
+        Command::Repos { tag, json, limit } => {
+            if limit == 0 {
+                bail!("--limit must be at least 1");
+            }
+            let all = store.repos_tagged(tag.as_deref())?;
+            // A listing is read inside a context window. 444 repositories are
+            // 12,000 tokens; 50,000 would be a million, for a command an
+            // agent runs to get its bearings.
+            let rows = &all[..all.len().min(limit)];
+            let hidden = all.len() - rows.len();
             if json {
                 let items: Vec<serde_json::Value> = rows
                     .iter()
@@ -713,11 +724,18 @@ fn main() -> Result<()> {
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&items)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "count": all.len(),
+                        "shown": rows.len(),
+                        "repositories": items,
+                    }))?
+                );
             } else if rows.is_empty() {
                 println!("  no repositories yet: steroids add owner/name");
             } else {
-                for summary in &rows {
+                for summary in rows {
                     println!(
                         "  {:<40} {:<12} {:>5} files  {:>8}  {}  {}",
                         link(&summary.name, 40),
@@ -728,7 +746,16 @@ fn main() -> Result<()> {
                         summary.indexed_at
                     );
                 }
-                println!("\n  {} repositories in {}", rows.len(), root.display());
+                if hidden > 0 {
+                    println!(
+                        "\n  {} of {} repositories shown in {}; narrow with --tag or raise --limit",
+                        rows.len(),
+                        all.len(),
+                        root.display()
+                    );
+                } else {
+                    println!("\n  {} repositories in {}", rows.len(), root.display());
+                }
             }
         }
 
