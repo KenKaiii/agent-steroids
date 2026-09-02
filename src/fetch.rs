@@ -16,6 +16,13 @@ use crate::store::Store;
 const USER_AGENT: &str = concat!("agent-steroids-corpus/", env!("CARGO_PKG_VERSION"));
 /// A source tarball larger than this is not a code sample, it is a data dump.
 const MAX_TARBALL_BYTES: u64 = 512 * 1024 * 1024;
+/// What one repository may hold in memory between download and commit. The
+/// tarball cap bounds the compressed stream, not what gzip makes of it: a
+/// crafted archive of many small plausible source files could otherwise take
+/// gigabytes per worker. nodejs/node, the largest real corpus member, keeps
+/// about 210 MB in 14k files; these leave five to ten times that.
+const MAX_KEPT_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_KEPT_FILES: usize = 200_000;
 
 /// Accept whatever form of a repository reference a user pastes.
 ///
@@ -490,7 +497,7 @@ pub fn prepare_if_changed(
 }
 
 pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
-    let mut repo = normalize_repo(name)?;
+    let repo = normalize_repo(name)?;
     // codeload resolves HEAD without knowing the branch name, which is what
     // lets ingest skip the API entirely.
     let fallback = || Upstream {
@@ -528,6 +535,17 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
     // at the same time, and that doubling is multiplied by every parallel
     // worker.
     let reader = response.body_mut().as_reader().take(MAX_TARBALL_BYTES);
+    prepare_from_tarball(repo, upstream, reader, include_tests)
+}
+
+/// Everything `prepare` does after the download, so a crafted archive can be
+/// pushed through the real path without a network.
+fn prepare_from_tarball(
+    mut repo: String,
+    mut upstream: Upstream,
+    reader: impl Read,
+    include_tests: bool,
+) -> Result<PreparedRepo> {
     let mut files = Vec::new();
     let (mut bytes_kept, mut seen) = (0u64, 0usize);
     let mut rejected: Vec<String> = Vec::new();
@@ -604,6 +622,13 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
 
         bytes_kept += content.len() as u64;
         files.push((path.to_string(), language, content));
+        if bytes_kept > MAX_KEPT_BYTES || files.len() > MAX_KEPT_FILES {
+            bail!(
+                "{repo} holds more source than a code sample should ({} files, {} MB); refusing to index it",
+                files.len(),
+                bytes_kept / (1024 * 1024)
+            );
+        }
     }
 
     Ok(PreparedRepo {
@@ -788,6 +813,24 @@ mod injection_tests {
     use super::*;
     use flate2::write::GzEncoder;
 
+    /// A gzipped tarball of `(name, body)` members under `repo-main/`.
+    fn tarball<'a>(members: impl Iterator<Item = (String, &'a [u8])>) -> Result<Vec<u8>> {
+        let mut archive =
+            tar::Builder::new(GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        for (name, body) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, format!("repo-main/{name}"), body)?;
+        }
+        Ok(archive.into_inner()?.finish()?)
+    }
+
+    fn run(bytes: &[u8]) -> Result<PreparedRepo> {
+        prepare_from_tarball("o/repo".into(), Upstream::default(), bytes, false)
+    }
+
     /// A file carrying hidden instructions must never enter the corpus, since
     /// everything stored here is read by an agent as if it were trustworthy.
     #[test]
@@ -798,41 +841,37 @@ mod injection_tests {
             .collect();
         let clean = "def retry(n):\n    for i in range(n):\n        yield i\n".repeat(4);
         let poisoned = format!("def helper():\n    return 1  # {hidden}\n").repeat(4);
+        let bytes = tarball(
+            [
+                ("src/clean.py".to_string(), clean.as_bytes()),
+                ("src/poisoned.py".to_string(), poisoned.as_bytes()),
+            ]
+            .into_iter(),
+        )?;
 
-        let mut archive =
-            tar::Builder::new(GzEncoder::new(Vec::new(), flate2::Compression::default()));
-        for (name, body) in [
-            ("repo-main/src/clean.py", &clean),
-            ("repo-main/src/poisoned.py", &poisoned),
-        ] {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            archive.append_data(&mut header, name, body.as_bytes())?;
-        }
-        let bytes = archive.into_inner()?.finish()?;
+        let prepared = run(&bytes)?;
+        let kept: Vec<&str> = prepared.files.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(kept, vec!["src/clean.py"]);
+        assert_eq!(prepared.rejected, vec!["src/poisoned.py".to_string()]);
+        assert_eq!(prepared.files_seen, 2);
+        Ok(())
+    }
 
-        // Exercise the same filtering the network path uses.
-        let mut kept = Vec::new();
-        let mut rejected = Vec::new();
-        let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
-        for entry in tar.entries()? {
-            let mut entry = entry?;
-            let raw = entry.path()?.to_string_lossy().into_owned();
-            let (_, path) = raw.split_once('/').unwrap();
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-            let text = String::from_utf8(content).unwrap();
-            if has_hidden_characters(&text) {
-                rejected.push(path.to_string());
-            } else {
-                kept.push(path.to_string());
-            }
-        }
-
-        assert_eq!(kept, vec!["src/clean.py".to_string()]);
-        assert_eq!(rejected, vec!["src/poisoned.py".to_string()]);
+    /// The tarball cap bounds the compressed stream. An archive of many
+    /// plausible source files that each pass every filter must still stop at
+    /// the kept-file ceiling instead of growing until the worker dies.
+    #[test]
+    fn an_archive_of_endless_source_files_is_refused() -> Result<()> {
+        let body = "def f(x):\n    return x + 1\n".repeat(8);
+        let bytes =
+            tarball((0..=MAX_KEPT_FILES).map(|i| (format!("src/m{i}.py"), body.as_bytes())))?;
+        let Err(error) = run(&bytes) else {
+            panic!("must refuse");
+        };
+        assert!(
+            error.to_string().contains("more source than a code sample"),
+            "{error}"
+        );
         Ok(())
     }
 }

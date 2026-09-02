@@ -480,10 +480,14 @@ impl Store {
             )?;
             offset += packed.len() as u64;
         }
+        // The blob bytes must be on disk before the rows that point at them
+        // are committed. SQLite fsyncs its own commit; without this the
+        // database could survive a power cut while the file it indexes was
+        // still in the page cache, and every read of those rows would fail
+        // with an EOF, taking whole searches down with it. One fsync per
+        // 32 MB batch is noise next to the compression that precedes it.
+        writer.sync_data()?;
         transaction.commit()?;
-        // read_document uses a separate handle, so buffered bytes must reach
-        // the file or a document written this session would read back empty.
-        writer.flush()?;
         Ok(())
     }
 
