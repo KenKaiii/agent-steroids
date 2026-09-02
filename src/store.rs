@@ -1015,11 +1015,16 @@ impl Store {
 
     /// Whether any indexed file path matches a glob.
     pub fn any_path_matches(&self, glob: &str) -> Result<bool> {
-        Ok(self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM documents WHERE offset >= 0 AND path GLOB ?1)",
-            params![sql_glob(glob)],
-            |row| row.get(0),
-        )?)
+        let globs = sql_globs(glob);
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM documents WHERE offset >= 0 AND {})",
+            glob_clause("path", 1, globs.len())
+        );
+        Ok(self
+            .db
+            .query_row(&sql, rusqlite::params_from_iter(globs.iter()), |row| {
+                row.get(0)
+            })?)
     }
 
     /// (repo, path) for every indexed file. Half a million rows is a few
@@ -1127,11 +1132,44 @@ impl Store {
 
 /// Take an exclusive advisory lock, blocking until it is available.
 ///
-/// A path glob as SQLite's GLOB reads it. Ours treats `[` literally, since
-/// `app/[slug]/page.tsx` is a real path; SQLite reads it as a class unless it
-/// is written `[[]`.
-pub fn sql_glob(glob: &str) -> String {
-    glob.replace('[', "[[]")
+/// The SQLite GLOB patterns that together accept what `search::glob_matches`
+/// accepts, so the SQL prefilter never drops a path the exact match wants.
+///
+/// SQLite's `*` already crosses `/`, so a bare `**` needs nothing. `**/` must
+/// also match zero directories, which one GLOB cannot say, so each becomes
+/// two alternatives: dropped, or `*/`. A trailing `/**` also accepts the bare
+/// prefix, so `--path src/lib.rs` finds that file. `[` is literal, since
+/// `app/[slug]/page.tsx` is a real path; SQLite reads it as a class unless
+/// it is written `[[]`.
+pub fn sql_globs(glob: &str) -> Vec<String> {
+    let mut sources = vec![glob];
+    if let Some(prefix) = glob.strip_suffix("/**") {
+        sources.push(prefix);
+    }
+    let mut variants = Vec::new();
+    for source in sources {
+        let mut partial = vec![String::new()];
+        let mut rest = source;
+        while let Some(at) = rest.find("**/") {
+            let literal = &rest[..at];
+            partial = partial
+                .iter()
+                .flat_map(|head| [format!("{head}{literal}"), format!("{head}{literal}*/")])
+                .collect();
+            rest = &rest[at + 3..];
+        }
+        variants.extend(partial.into_iter().map(|head| head + rest));
+    }
+    variants.iter().map(|v| v.replace('[', "[[]")).collect()
+}
+
+/// `(column GLOB ?first OR column GLOB ?first+1 ...)` for `count` patterns
+/// bound in order from `first`.
+pub fn glob_clause(column: &str, first: usize, count: usize) -> String {
+    let terms: Vec<String> = (first..first + count)
+        .map(|n| format!("{column} GLOB ?{n}"))
+        .collect();
+    format!("({})", terms.join(" OR "))
 }
 
 /// Rows written before `add_repo` stamped RFC 3339 hold SQLite's

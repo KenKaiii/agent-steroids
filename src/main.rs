@@ -12,6 +12,7 @@ mod filters;
 mod index;
 mod recent;
 mod render;
+mod root;
 mod search;
 mod store;
 mod tui;
@@ -269,24 +270,20 @@ enum Command {
     },
 }
 
-/// Where the corpus lives.
-///
-/// Defaults under the home directory so the command works from any directory,
-/// which is what a globally installed tool has to do.
-fn corpus_root(flag: Option<PathBuf>) -> PathBuf {
-    if let Some(path) = flag {
-        return path;
+/// `steroids config root [path|default]`. Handled before any corpus opens,
+/// since it decides which corpus that would be.
+fn config_root(value: Option<&str>) -> Result<()> {
+    let default = root::default();
+    let Some(value) = value else {
+        println!("{}", root::stored(&default).unwrap_or(default).display());
+        return Ok(());
+    };
+    let changed = root::set(&default, value)?;
+    println!("  root = {}", changed.root.display());
+    if let Some(from) = changed.left_behind {
+        println!("  {}", root::move_hint(&from, &changed.root));
     }
-    if let Some(path) = std::env::var_os("STEROIDS_ROOT") {
-        return PathBuf::from(path);
-    }
-    // Windows sets USERPROFILE rather than HOME, and without this the corpus
-    // would land in whatever directory the command happened to run from.
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    match home {
-        Some(home) => PathBuf::from(home).join(".steroids"),
-        None => PathBuf::from("./corpus-data"),
-    }
+    Ok(())
 }
 
 /// A repository name as a terminal hyperlink to its GitHub page.
@@ -525,7 +522,12 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let parallel = cli.parallel;
-    let root = corpus_root(cli.root);
+    if let Some(Command::Config { key, value }) = &cli.command
+        && key.as_deref() == Some("root")
+    {
+        return config_root(value.as_deref());
+    }
+    let root = root::resolve(cli.root)?;
     upgrade::cleanup_old();
 
     let Some(command) = cli.command else {
@@ -829,6 +831,50 @@ fn run(cli: Cli) -> Result<()> {
                         .join(", ")
                 );
                 return report_filter_miss(&store, json, &shown, advice);
+            }
+            // Each filter passed on its own, but together they hid every hit.
+            // Diagnosing the pattern now would say "it does appear in the
+            // corpus, loosen the pattern" and send the agent rewriting a query
+            // that was fine; say where the hits are and which flags hide them.
+            let filtered =
+                !repos.is_empty() || tag.is_some() || language.is_some() || path.is_some();
+            if matches.is_empty() && filtered {
+                let unfiltered = search::search(
+                    &mut store,
+                    &pattern,
+                    &Query {
+                        repos: &[],
+                        tag: None,
+                        language: None,
+                        path_glob: None,
+                        per_repo: Some(1),
+                        ..query
+                    },
+                )?;
+                if !unfiltered.is_empty() {
+                    let flags: Vec<&str> = [
+                        (!repos.is_empty(), "--repo"),
+                        (tag.is_some(), "--tag"),
+                        (language.is_some(), "--language"),
+                        (path.is_some(), "--path"),
+                    ]
+                    .into_iter()
+                    .filter_map(|(set, flag)| set.then_some(flag))
+                    .collect();
+                    let mut where_: Vec<String> = unfiltered
+                        .iter()
+                        .take(5)
+                        .map(|m| format!("{} {}", m.repo, m.path))
+                        .collect();
+                    where_.dedup();
+                    let advice = format!(
+                        "No matches within {}, but the pattern does match elsewhere in \
+                         the corpus, e.g. {}. The pattern is fine; widen or drop the filter.",
+                        flags.join("/"),
+                        where_.join(", ")
+                    );
+                    return report_filter_miss(&store, json, &shown, advice);
+                }
             }
             let unindexed = search::unindexed(&store)?;
             if json {
@@ -1307,6 +1353,11 @@ fn run(cli: Cli) -> Result<()> {
             let mut settings = config::Config::load(&store)?;
             match (key, value) {
                 (None, _) => {
+                    println!(
+                        "  {:<16} {:<28} where the corpus lives (absolute path, or 'default')",
+                        "root",
+                        root.display()
+                    );
                     for (key, help) in config::KEYS {
                         println!("  {key:<16} {:<28} {help}", settings.get(key));
                     }

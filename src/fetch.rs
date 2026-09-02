@@ -230,6 +230,23 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// releasing a worker that has genuinely stalled.
 const BODY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+const RETRIES: u32 = 2;
+const RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Worth a second try: the network hiccupped or the server was momentarily
+/// unwell. A 4xx, a bad URL, a TLS failure or a body over the limit will
+/// come back the same way, so those are not.
+fn is_transient(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::StatusCode(code) => (500..600).contains(code),
+        ureq::Error::Io(_)
+        | ureq::Error::Timeout(_)
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::BodyStalled => true,
+        _ => false,
+    }
+}
+
 fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
@@ -253,26 +270,45 @@ fn get_within(
     accept: &str,
     deadline: Option<Duration>,
 ) -> Result<ureq::http::Response<ureq::Body>> {
-    let mut request = agent()
-        .get(url)
-        .config()
-        .timeout_global(deadline)
-        .build()
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", accept);
-    // The API is the only host that wants the token. The git smart-HTTP
-    // endpoint answers a Bearer header with 401, which would turn every
-    // `update` into a full re-download, and codeload does not need one.
-    if url.starts_with("https://api.github.com/")
-        && let Some(token) = github_token()
-    {
-        request = request.header("Authorization", &format!("Bearer {token}"));
-    }
+    let request = || {
+        let mut request = agent()
+            .get(url)
+            .config()
+            .timeout_global(deadline)
+            .build()
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", accept);
+        // The API is the only host that wants the token. The git smart-HTTP
+        // endpoint answers a Bearer header with 401, which would turn every
+        // `update` into a full re-download, and codeload does not need one.
+        if url.starts_with("https://api.github.com/")
+            && let Some(token) = github_token()
+        {
+            request = request.header("Authorization", &format!("Bearer {token}"));
+        }
+        request.call()
+    };
+    // A reset connection or a 502 from codeload is a blip, not a verdict on
+    // the repository; across a thousand-repo update a handful of those would
+    // otherwise be reported as failures and need a second run. Two retries
+    // with a short backoff cover the blip without stalling a worker on a
+    // host that is really down. Never a 4xx: those are answers, and a rate
+    // limit's wait is the server's to dictate, not a backoff's.
+    let mut attempt = 0;
+    let outcome = loop {
+        match request() {
+            Err(error) if attempt < RETRIES && is_transient(&error) => {
+                attempt += 1;
+                std::thread::sleep(RETRY_BACKOFF * attempt);
+            }
+            outcome => break outcome,
+        }
+    };
     // ureq treats a 4xx as an error, so the rate-limit case arrives here.
     // GitHub signals an exhausted limit with 403 and an unhelpful body. Only
     // api.github.com is limited; codeload, which serves the code itself, is
     // not -- so this is reachable from metadata and discovery, never ingest.
-    match request.call() {
+    match outcome {
         Ok(response) => Ok(response),
         Err(error) => {
             let status = error.to_string();
@@ -604,6 +640,49 @@ pub fn commit(prepared: &PreparedRepo, store: &mut Store) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dropped connection, then a 503, then a real answer: the first two
+    /// are retried and the caller never sees them. A 404 is not retried.
+    #[test]
+    fn transient_failures_are_retried_and_verdicts_are_not() -> Result<()> {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/x", listener.local_addr()?);
+        let server = std::thread::spawn(move || -> std::io::Result<usize> {
+            let reply = |status: &str| {
+                let (mut stream, _) = listener.accept()?;
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                )
+            };
+            // First: accept and hang up without a byte.
+            drop(listener.accept()?);
+            reply("503 Service Unavailable")?;
+            reply("200 OK")?;
+            // The 404 must arrive exactly once.
+            reply("404 Not Found")?;
+            let mut extra = 0;
+            listener.set_nonblocking(true)?;
+            std::thread::sleep(Duration::from_millis(200));
+            while listener.accept().is_ok() {
+                extra += 1;
+            }
+            Ok(extra)
+        });
+
+        let text = get_text(&url, "*/*")?;
+        assert_eq!(text, "ok");
+        let verdict = get_text(&url, "*/*");
+        assert!(verdict.is_err(), "a 404 must fail");
+        let extra = server.join().expect("server thread")?;
+        assert_eq!(extra, 0, "the 404 was retried");
+        Ok(())
+    }
 
     #[test]
     fn rejects_crafted_repository_names() {

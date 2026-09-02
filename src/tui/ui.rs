@@ -128,6 +128,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("a", "add"),
             ("d", "remove"),
             ("u", "update"),
+            ("l", "location"),
             ("q", "quit"),
         ],
         Screen::Files => &[
@@ -393,6 +394,11 @@ fn draw_modal(frame: &mut Frame, app: &App) {
             name.clone(),
             "y remove   any other key cancel",
         ),
+        Modal::SetRoot(input) => (
+            "Corpus location",
+            input.value().to_string(),
+            "absolute path; empty = default ~/.steroids   ↵ use   esc cancel",
+        ),
         Modal::Working(progress) => ("Working", progress.clone(), "please wait…"),
     };
 
@@ -402,7 +408,7 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     // The caret must line up with the text, so the input scrolls rather than
     // wrapping; other modals have short bodies and can wrap freely.
     let scroll = match &app.modal {
-        Modal::AddRepo(input) => input.visual_scroll(inner),
+        Modal::AddRepo(input) | Modal::SetRoot(input) => input.visual_scroll(inner),
         _ => 0,
     };
     let text = vec![
@@ -417,12 +423,12 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     let mut paragraph =
         Paragraph::new(text).block(panel(title).border_style(Style::default().fg(ACCENT)));
     paragraph = match &app.modal {
-        Modal::AddRepo(_) => paragraph.scroll((0, scroll as u16)),
+        Modal::AddRepo(_) | Modal::SetRoot(_) => paragraph.scroll((0, scroll as u16)),
         _ => paragraph.wrap(Wrap { trim: true }),
     };
     frame.render_widget(paragraph, area);
 
-    if let Modal::AddRepo(input) = &app.modal {
+    if let Modal::AddRepo(input) | Modal::SetRoot(input) = &app.modal {
         frame.set_cursor_position((
             area.x + 2 + (input.visual_cursor().saturating_sub(scroll)) as u16,
             area.y + 2,

@@ -38,6 +38,8 @@ pub enum Modal {
     AddRepo(Input),
     /// Confirming removal of the named repository.
     ConfirmRemove(String),
+    /// Typing where the corpus should live, e.g. a portable drive.
+    SetRoot(Input),
     /// A background job is running; the string is its latest progress line.
     Working(String),
 }
@@ -330,6 +332,9 @@ impl App {
             self.quit = true;
             return Ok(());
         }
+        // A status line stands in for the key bar. It has been read by the
+        // time the user presses anything, and the keys must come back then.
+        self.status.clear();
 
         match std::mem::replace(&mut self.modal, Modal::None) {
             Modal::Working(text) => {
@@ -372,6 +377,17 @@ impl App {
                 }
                 return Ok(());
             }
+            Modal::SetRoot(mut input) => {
+                match key.code {
+                    KeyCode::Enter => self.set_root(&crate::root::default(), input.value())?,
+                    KeyCode::Esc => {}
+                    _ => {
+                        input.handle_event(&ratatui::crossterm::event::Event::Key(key));
+                        self.modal = Modal::SetRoot(input);
+                    }
+                }
+                return Ok(());
+            }
             Modal::None => {}
         }
 
@@ -393,10 +409,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 Self::step(&mut self.repos_state, self.repos.len(), -1)
             }
-            KeyCode::Char('/') => {
-                self.screen = Screen::Search;
-                self.status.clear();
-            }
+            KeyCode::Char('/') => self.screen = Screen::Search,
             KeyCode::Enter | KeyCode::Right => {
                 if let Some(index) = self.repos_state.selected() {
                     let name = self.repos[index].name.clone();
@@ -414,7 +427,57 @@ impl App {
                 self.modal = Modal::Working("starting…".into());
                 job::update_all(self.root.clone(), self.tx.clone());
             }
+            KeyCode::Char('l') => self.open_location_picker(),
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// The OS folder dialog first; the typed field when there is none (SSH,
+    /// bare Linux) or to confirm and adjust what was picked, since a drive's
+    /// root is rarely where the corpus should sit.
+    fn open_location_picker(&mut self) {
+        use super::picker::{Pick, pick_folder};
+        let value = match pick_folder() {
+            Pick::Chosen(path) => {
+                let path = path.display().to_string();
+                self.status = "picked; press ↵ to use it, or add a subfolder".into();
+                path
+            }
+            Pick::Cancelled => return,
+            Pick::Unavailable => self.root.display().to_string(),
+        };
+        self.modal = Modal::SetRoot(Input::new(value));
+    }
+
+    /// Move future runs, and this one, to another corpus location. A bad
+    /// path is reported in the footer rather than closing the app: the user
+    /// is mid-task, and the corpus they had is still open.
+    ///
+    /// `default` is where the pointer file lives; a parameter so tests never
+    /// write the real `~/.steroids/root`.
+    pub fn set_root(&mut self, default: &std::path::Path, value: &str) -> Result<()> {
+        // Open before switching: a root that cannot be opened must leave
+        // the current corpus in place, not close the app on a written pointer.
+        let opened = crate::root::set(default, value)
+            .and_then(|changed| Ok((Store::open(&changed.root)?, changed)));
+        match opened {
+            Ok((store, changed)) => {
+                self.store = store;
+                self.root = changed.root;
+                self.release_browsing_memory();
+                self.screen = Screen::Repos;
+                self.reload_repos()?;
+                self.status = match changed.left_behind {
+                    Some(from) => format!(
+                        "now using {}. {}",
+                        self.root.display(),
+                        crate::root::move_hint(&from, &self.root).replace("\n    ", " ")
+                    ),
+                    None => format!("now using {}", self.root.display()),
+                };
+            }
+            Err(error) => self.status = format!("failed: {error}"),
         }
         Ok(())
     }

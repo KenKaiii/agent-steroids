@@ -810,29 +810,34 @@ pub fn diagnose(store: &mut Store, pattern: &str) -> Result<Facts> {
 }
 
 /// Shell-style glob, supporting `*`, `?` and `**`.
+///
+/// `*` crosses `/`, as SQLite's GLOB does, so `**/*.rs` and `*.rs` both mean
+/// any depth. `**/` also matches zero directories, so `**/src/**` finds a
+/// top-level `src/lib.rs`; and a trailing `/**` accepts its bare prefix, so
+/// the `src/lib.rs/**` that `path_filter` makes of a file name finds the file.
 fn glob_matches(pattern: &str, text: &str) -> bool {
-    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
-    let (mut pi, mut ti, mut star, mut mark) = (0usize, 0usize, usize::MAX, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = pi;
-            pi += 1;
-            mark = ti;
-        } else if star != usize::MAX {
-            pi = star + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
+    // simplification: backtracks on every `*`, so a pattern of many stars
+    // against a long path is polynomial; paths are short and `path_filter`
+    // caps `**/`. Upgrade path: memoise on (pattern, text) offsets.
+    fn go(p: &[char], t: &[char]) -> bool {
+        match p {
+            [] => t.is_empty(),
+            ['*', '*', '/', rest @ ..] => {
+                go(rest, t)
+                    || t.iter()
+                        .enumerate()
+                        .any(|(i, c)| *c == '/' && go(rest, &t[i + 1..]))
+            }
+            ['*', rest @ ..] => (0..=t.len()).any(|i| go(rest, &t[i..])),
+            ['?', rest @ ..] => !t.is_empty() && go(rest, &t[1..]),
+            [c, rest @ ..] => t.first() == Some(c) && go(rest, &t[1..]),
         }
     }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
+    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    go(&p, &t)
+        || pattern
+            .strip_suffix("/**")
+            .is_some_and(|prefix| glob_matches(prefix, text))
 }
 
 /// How useful a match is likely to be, higher is better.
@@ -972,8 +977,13 @@ fn unnarrowed_candidates(
         doc_binds.push(bind.next().expect("language bind"));
     }
     if query.path_glob.is_some() {
-        doc_sql.push_str(&format!(" AND path GLOB ?{}", doc_binds.len() + 2));
-        doc_binds.push(bind.next().expect("glob bind"));
+        // Every remaining bind is a glob alternative.
+        let globs: Vec<&String> = bind.collect();
+        doc_sql.push_str(&format!(
+            " AND {}",
+            crate::store::glob_clause("path", doc_binds.len() + 2, globs.len())
+        ));
+        doc_binds.extend(globs);
     }
     let repos: Vec<i64> = store
         .db
@@ -1161,6 +1171,10 @@ pub fn path_filter(value: &str) -> Result<String> {
         bail!("--path must not be empty");
     }
     if trimmed.contains(['*', '?', '[']) {
+        // Each `**/` doubles the SQL alternatives `sql_globs` has to bind.
+        if trimmed.matches("**/").count() > 4 {
+            bail!("--path may hold at most four '**/' segments");
+        }
         return Ok(trimmed.to_string());
     }
     Ok(format!("{}/**", trimmed.trim_end_matches('/')))
@@ -1279,10 +1293,15 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         binds.push(language.to_string());
     }
     // Filtered in SQL so the glob does not eat into the candidate budget;
-    // `sql_glob` keeps SQLite reading `[` the way this module does.
+    // `sql_globs` spells it the way SQLite reads it. Rows are still checked
+    // by `glob_matches` below, so the SQL only has to be a superset.
     if let Some(glob) = query.path_glob {
-        sql.push_str(&format!(" AND d.path GLOB ?{}", binds.len() + 1));
-        binds.push(crate::store::sql_glob(glob));
+        let globs = crate::store::sql_globs(glob);
+        sql.push_str(&format!(
+            " AND {}",
+            crate::store::glob_clause("d.path", binds.len() + 1, globs.len())
+        ));
+        binds.extend(globs);
     }
     let (candidate_ids, capped) =
         if let Some(ids) = narrowed.as_ref().filter(|ids| ids.len() > SQL_ID_LIMIT) {
@@ -1895,6 +1914,43 @@ mod tests {
         assert!(glob_matches("src/*.py", "src/agent.py"));
         assert!(glob_matches("*/agent.py", "src/agent.py"));
         assert!(!glob_matches("src/*.py", "src/agent.rs"));
+        assert!(glob_matches("**/*.rs", "lib.rs"));
+        assert!(glob_matches("a?c", "abc"));
+        assert!(!glob_matches("a?c", "ac"));
+    }
+
+    /// `**/` means zero or more directories, as ripgrep and gitignore read
+    /// it, and the SQL prefilter must agree with the exact matcher on every
+    /// case or a path the user asked for silently vanishes.
+    #[test]
+    fn double_star_slash_matches_zero_directories() -> Result<()> {
+        let cases = [
+            ("**/src/**", "src/lib.rs", true),
+            ("**/src/**", "crates/a/src/lib.rs", true),
+            ("**/src/**", "mysrc/lib.rs", false),
+            ("src/**/lib.rs", "src/lib.rs", true),
+            ("src/**/lib.rs", "src/a/b/lib.rs", true),
+            ("src/**/lib.rs", "src/xlib.rs", false),
+            ("src/lib.rs/**", "src/lib.rs", true),
+            ("src/lib.rs/**", "src/lib.rsx", false),
+            ("src/**", "src-legacy/a.rs", false),
+        ];
+        let db = rusqlite::Connection::open_in_memory()?;
+        for (glob, path, expected) in cases {
+            assert_eq!(glob_matches(glob, path), expected, "{glob} vs {path}");
+            let globs = crate::store::sql_globs(glob);
+            let sql = format!(
+                "SELECT {}",
+                crate::store::glob_clause(&format!("'{path}'"), 1, globs.len())
+            );
+            let in_sql: bool =
+                db.query_row(&sql, rusqlite::params_from_iter(globs.iter()), |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(in_sql, expected, "SQL {glob} vs {path}: {globs:?}");
+        }
+        assert!(path_filter("**/**/**/**/**/x").is_err());
+        Ok(())
     }
 
     #[test]

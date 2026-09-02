@@ -160,11 +160,23 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 | `steroids stats` | What it's costing you in disk |
 | `steroids upgrade` | Install the latest release. `--check` only tells you if there is one |
 
-Point it at a USB drive and carry the whole thing between machines:
+Keep the corpus on a portable SSD and carry it between machines. Set it once
+and every later command, and the agent's tool, uses it:
 
 ```bash
-STEROIDS_ROOT=/Volumes/MyDrive/steroids steroids search 'retry'
+steroids config root /Volumes/MyDrive/steroids   # remembers it; `default` goes back
+mv ~/.steroids/corpus.db ~/.steroids/blobs.bin /Volumes/MyDrive/steroids/  # carry over what you have
 ```
+
+Or press `l` in the interactive browser (`steroids` with no arguments): the
+system folder dialog opens (Finder, zenity/kdialog, or the Windows picker);
+pick the drive, then press Enter to confirm or add a subfolder. The dialog
+shows hidden folders on macOS so `~/.steroids` is reachable (elsewhere press
+Ctrl+H); leaving the field empty also goes back to the default. Over SSH or
+without a desktop you type the path instead. If the
+drive is unplugged, commands stop with a clear error rather than quietly
+starting an empty corpus on the internal disk. For a one-off, `--root <dir>`
+or `STEROIDS_ROOT=<dir>` win over the stored setting.
 
 <details>
 <summary><strong>⚙️ Settings</strong></summary>

@@ -3,6 +3,7 @@
 mod app;
 mod highlight;
 pub(crate) mod job;
+mod picker;
 mod ui;
 
 use std::path::PathBuf;
@@ -433,6 +434,53 @@ mod interaction {
         assert!(app.files.is_empty(), "stale file list retained");
         assert!(!app.repos.iter().any(|summary| summary.name == victim));
         terminal.draw(|f| ui::draw(f, &mut app))?;
+
+        std::fs::remove_dir_all(&scratch)?;
+        Ok(())
+    }
+
+    /// The location field is prefilled with the current root; a bad path
+    /// stays in the footer with the old corpus still open; a good one swaps
+    /// the store and the list. No populated corpus needed. `l` itself is not
+    /// pressed: it opens the OS folder dialog, which no test may do.
+    #[test]
+    fn location_dialog_switches_corpus() -> Result<()> {
+        let scratch = crate::store::scratch_dir("root-tui");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let (home, old, ssd) = (
+            scratch.join("home"),
+            scratch.join("old"),
+            scratch.join("ssd").join("corpus"),
+        );
+        std::fs::create_dir_all(ssd.parent().unwrap())?;
+        let mut app = App::new(old.clone(), Store::open(&old)?)?;
+        let mut terminal = Terminal::new(TestBackend::new(90, 24))?;
+
+        app.modal = super::app::Modal::SetRoot(tui_input::Input::new(old.display().to_string()));
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+        app.on_key(KeyEvent::from(KeyCode::Esc))?;
+        assert!(matches!(app.modal, super::app::Modal::None));
+
+        app.set_root(&home, "not/absolute")?;
+        assert!(app.status.starts_with("failed"), "{}", app.status);
+        assert_eq!(app.root, old);
+
+        app.set_root(&home, &ssd.display().to_string())?;
+        assert_eq!(app.root, ssd);
+        assert_eq!(crate::root::stored(&home), Some(ssd.clone()));
+        assert!(app.status.starts_with("now using"), "{}", app.status);
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+
+        // The status stands in for the key bar; the next keypress, whatever
+        // it is, must bring the keys back rather than leave the user stuck.
+        app.on_key(KeyEvent::from(KeyCode::Down))?;
+        assert!(app.status.is_empty(), "status stuck: {}", app.status);
+        terminal.draw(|f| ui::draw(f, &mut app))?;
+        let buf = terminal.backend().buffer();
+        let text: String = (0..buf.area.width)
+            .map(|x| buf[(x, buf.area.height - 1)].symbol())
+            .collect();
+        assert!(text.contains("location"), "key bar not back: {text}");
 
         std::fs::remove_dir_all(&scratch)?;
         Ok(())

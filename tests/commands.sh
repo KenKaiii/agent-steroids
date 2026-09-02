@@ -176,6 +176,35 @@ ok "remove"                    0 "removed"       -- "$BIN" remove antirez/smallc
 ok "gone after remove"         0 "no repositories" -- "$BIN" repos
 
 echo
+echo "=== config root: the corpus can live elsewhere, e.g. a portable drive ==="
+# The pointer lives under HOME, and STEROIDS_ROOT would override it, so these
+# run with a scratch HOME and the variable unset. The real ~/.steroids/root
+# is never touched.
+FAKEHOME="$(mktemp -d)"
+SSD="$FAKEHOME/ssd/steroids"
+mkdir -p "$FAKEHOME/ssd"
+# `timeout` cannot run a shell function, so the prefix is an array.
+AT_HOME=(env -u STEROIDS_ROOT HOME="$FAKEHOME" USERPROFILE="$FAKEHOME" "$BIN")
+ok "config root reads default"     0 "$FAKEHOME/.steroids" -- "${AT_HOME[@]}" config root
+ok "config root relative refused"  1 "absolute path"       -- "${AT_HOME[@]}" config root relative/path
+ok "config root missing drive"     1 "drive mounted"       -- "${AT_HOME[@]}" config root /nonexistent-drive/steroids
+ok "config root set"               0 "root = $SSD"         -- "${AT_HOME[@]}" config root "$SSD"
+ok "config root reads back"        0 "$SSD"               -- "${AT_HOME[@]}" config root
+ok "config lists root first"       0 "root .*$SSD"        -- "${AT_HOME[@]}" config
+ok "stats lands on the new root"   0 "location .*$SSD"    -- "${AT_HOME[@]}" stats
+ok "--root still wins"             0 "location .*$ROOT"   -- "${AT_HOME[@]}" --root "$ROOT" stats
+ok "env still wins"                0 "location .*$ROOT"   -- env HOME="$FAKEHOME" "$BIN" stats
+# An unplugged drive must stop the command, not quietly open an empty
+# corpus on the internal disk and invite re-indexing there.
+mv "$SSD" "$SSD.unplugged"
+ok "unplugged drive is an error"   1 "not reachable"       -- "${AT_HOME[@]}" stats
+mv "$SSD.unplugged" "$SSD"
+ok "config root default"           0 "root = $FAKEHOME/.steroids" -- "${AT_HOME[@]}" config root default
+ok "config root back to default"   0 "$FAKEHOME/.steroids" -- "${AT_HOME[@]}" config root
+ok "stats back on default"         0 "location .*$FAKEHOME/.steroids" -- "${AT_HOME[@]}" stats
+rm -rf "$FAKEHOME"
+
+echo
 echo "=== idempotence: repeating a command must be safe ==="
 ok "re-add same repo"      0 "files kept" -- "$BIN" add antirez/smallchat
 ok "add duplicate names"   0 "files kept" -- "$BIN" add antirez/smallchat antirez/smallchat
