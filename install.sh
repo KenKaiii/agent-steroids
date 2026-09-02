@@ -174,8 +174,9 @@ tar -xzf "${TMP}/${ASSET}" -C "$TMP" "$BIN" 2>/dev/null ||
 chmod 0755 "${TMP}/${BIN}"
 
 # Sibling name then rename: a running steroids is never overwritten in place.
-cp "${TMP}/${BIN}" "${DIR}/${BIN}.new" && mv "${DIR}/${BIN}.new" "${DIR}/${BIN}" ||
+if ! cp "${TMP}/${BIN}" "${DIR}/${BIN}.new" || ! mv "${DIR}/${BIN}.new" "${DIR}/${BIN}"; then
 	die "could not write to ${DIR}"
+fi
 step "installed" "${DIR}/${BIN}"
 
 say ""

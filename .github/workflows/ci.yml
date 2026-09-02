@@ -111,4 +111,6 @@ jobs:
         run: |
           ./install.ps1
           & "$env:INSTALL_DIR\steroids.exe" --version
-          if (-not ((./install.ps1) -match 'already at')) { throw 'second run was not a no-op' }
+          # Write-Host goes to the information stream, so capture that.
+          $second = ./install.ps1 6>&1 | Out-String
+          if ($second -notmatch 'already at') { throw "second run was not a no-op:`n$second" }
