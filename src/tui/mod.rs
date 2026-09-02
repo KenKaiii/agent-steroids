@@ -482,6 +482,8 @@ mod interaction {
             .collect();
         assert!(text.contains("location"), "key bar not back: {text}");
 
+        // Windows refuses to delete files the store still has open.
+        drop(app);
         std::fs::remove_dir_all(&scratch)?;
         Ok(())
     }
