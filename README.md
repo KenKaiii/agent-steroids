@@ -71,11 +71,19 @@ Fine for looking something up once. Useless when your agent wants 30 examples be
 
 ## 🚀 Get it
 
-Needs [Rust](https://rustup.rs). Then:
+One line, no Rust needed. macOS / Linux:
 
 ```bash
-cargo install --git https://github.com/KenKaiii/agent-steroids
+curl -fsSL https://raw.githubusercontent.com/KenKaiii/agent-steroids/main/install.sh | sh
 ```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/KenKaiii/agent-steroids/main/install.ps1 | iex
+```
+
+The script downloads the release for your machine, checks it against the release's `SHA256SUMS`, and puts it on your PATH. Read it first if you like; it is short. Have [Rust](https://rustup.rs)? `cargo install --git https://github.com/KenKaiii/agent-steroids` works too.
 
 Done. You now have a `steroids` command. It updates itself: `steroids update` also installs the latest release, and other commands mention one once a day. `steroids config auto_upgrade false` to opt out.
 
@@ -263,5 +271,5 @@ AGPL-3.0 licensed. Use it, change it, ship it. If you run a modified version as 
 </p>
 
 <p align="center">
-  <code>cargo install --git https://github.com/KenKaiii/agent-steroids</code>
+  <code>curl -fsSL https://raw.githubusercontent.com/KenKaiii/agent-steroids/main/install.sh | sh</code>
 </p>

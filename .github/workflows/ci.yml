@@ -75,3 +75,40 @@ jobs:
       # codes. Unit tests cover the engine; this covers the surface.
       - name: Command tests
         run: BIN=./target/release/steroids bash tests/commands.sh
+
+  # The install scripts are what a first-time user runs, with no toolchain to
+  # fall back on. Each is exercised for real against the latest release:
+  # install, run, and refuse a second identical install.
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh install.sh
+      - name: install.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/steroids" --version
+          INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh | grep 'already at'
+
+  installer-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.ps1
+        shell: pwsh
+        env:
+          INSTALL_DIR: ${{ runner.temp }}\bin
+        run: |
+          ./install.ps1
+          & "$env:INSTALL_DIR\steroids.exe" --version
+          if (-not ((./install.ps1) -match 'already at')) { throw 'second run was not a no-op' }
