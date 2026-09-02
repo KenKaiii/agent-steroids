@@ -141,6 +141,18 @@ pub fn ingest_all(
                     // Report the canonical owner/name rather than the raw
                     // input, so a pasted URL does not appear as one.
                     let name = repo.repo.clone();
+                    // A repository with nothing to search is not indexed: a
+                    // row with zero files looks like success in `repos` and
+                    // teaches nothing.
+                    if repo.files.is_empty() {
+                        let error = format!(
+                            "nothing indexable ({} files seen, none are code)",
+                            repo.files_seen
+                        );
+                        report(&name, Err(&error), done, total);
+                        outcome.failed.push((name, error));
+                        continue;
+                    }
                     // Writing is serialised here: rusqlite connections are not
                     // Sync, and it is the cheap half of the work anyway.
                     match fetch::commit(&repo, store) {

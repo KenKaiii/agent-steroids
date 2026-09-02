@@ -98,9 +98,22 @@ pub fn normalize_repo(input: &str) -> Result<String> {
     ] {
         text = text.strip_prefix(prefix).unwrap_or(text);
     }
+    let bare =
+        !input.contains("://") && !input.contains("github.com") && !input.contains("gitee.com");
+    // Only HEAD is fetched, so a ref would be ignored, and silently indexing
+    // the wrong commit is worse than refusing. In a URL `#` is a fragment
+    // (`#readme`); in a bare name it can only be meant as a ref.
+    let unsupported = |what: &str| {
+        anyhow::anyhow!(
+            "{what} are not supported in {input:?}; pass owner/name (HEAD is always fetched)"
+        )
+    };
+    if text.contains('@') || (bare && text.contains('#')) {
+        return Err(unsupported("refs"));
+    }
     text = text.split(['#', '?']).next().unwrap_or(text);
 
-    // Keep only owner/name; drop /tree/main, /blob/..., /pull/12 and so on.
+    // Keep only owner/name; drop /tree/main, /pull/12 and so on.
     let mut parts = text.split('/').filter(|part| !part.is_empty());
     let (Some(owner), Some(name)) = (parts.next(), parts.next()) else {
         bail!("not a valid repository reference: {input:?} (expected owner/name)");
@@ -110,11 +123,16 @@ pub fn normalize_repo(input: &str) -> Result<String> {
     let name = name.strip_suffix(".git").unwrap_or(name);
     // Anything deeper is only meaningful as a browser URL (tree, blob, pull),
     // and those come with a host. A bare `a/b/c` is a typo, and the 404 it
-    // would otherwise earn from the network blames the wrong thing.
-    let bare =
-        !input.contains("://") && !input.contains("github.com") && !input.contains("gitee.com");
-    if bare && parts.next().is_some() {
+    // would otherwise earn from the network blames the wrong thing. A URL
+    // into a subdirectory or file (`/tree/main/crates`, `/blob/main/x.rs`)
+    // asks for a slice the tool cannot deliver: the whole repository is what
+    // would be indexed.
+    let rest: Vec<&str> = parts.collect();
+    if bare && !rest.is_empty() {
         bail!("not a valid repository reference: {input:?} (expected owner/name)");
+    }
+    if matches!(rest.first(), Some(&"tree") | Some(&"blob")) && rest.len() > 2 {
+        return Err(unsupported("subpaths"));
     }
     let repo = format!("{owner}/{name}");
     validate_repo(&repo)?;
@@ -158,7 +176,38 @@ pub fn validate_repo(repo: &str) -> Result<()> {
 static RATE_LIMIT_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn have_token() -> bool {
-    std::env::var("GITHUB_TOKEN").is_ok_and(|token| !token.is_empty())
+    github_token().is_some()
+}
+
+/// `GITHUB_TOKEN`, else whatever the `gh` CLI is logged in with.
+///
+/// A machine with `gh` set up has a token already; asking the user to export
+/// it again is a step most skip, and unauthenticated discovery gets ten
+/// searches a minute. Resolved once per process: `gh` takes ~50ms.
+pub fn github_token() -> Option<&'static str> {
+    static TOKEN: OnceLock<Option<String>> = OnceLock::new();
+    TOKEN
+        .get_or_init(|| {
+            if let Ok(token) = std::env::var("GITHUB_TOKEN")
+                && !token.is_empty()
+            {
+                return Some(token);
+            }
+            let output = std::process::Command::new("gh")
+                .args(["auth", "token"])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
+            // A token is one line of printable ASCII; anything else is not
+            // going into a request header.
+            (!token.is_empty() && token.chars().all(|c| c.is_ascii_graphic())).then_some(token)
+        })
+        .as_deref()
 }
 
 /// A server that accepts the connection and then stalls would otherwise block
@@ -211,8 +260,11 @@ fn get_within(
         .build()
         .header("User-Agent", USER_AGENT)
         .header("Accept", accept);
-    if let Ok(token) = std::env::var("GITHUB_TOKEN")
-        && !token.is_empty()
+    // The API is the only host that wants the token. The git smart-HTTP
+    // endpoint answers a Bearer header with 401, which would turn every
+    // `update` into a full re-download, and codeload does not need one.
+    if url.starts_with("https://api.github.com/")
+        && let Some(token) = github_token()
     {
         request = request.header("Authorization", &format!("Bearer {token}"));
     }
@@ -237,7 +289,8 @@ fn get_within(
                     if have_token() {
                         "Wait for the reset, or add repositories without --metadata."
                     } else {
-                        "Set GITHUB_TOKEN for 5,000/hour. Plain `add` needs no API calls."
+                        "Set GITHUB_TOKEN or run `gh auth login` for 5,000/hour. \
+                         Plain `add` needs no API calls."
                     }
                 );
             }
@@ -401,7 +454,7 @@ pub fn prepare_if_changed(
 }
 
 pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
-    let repo = normalize_repo(name)?;
+    let mut repo = normalize_repo(name)?;
     // codeload resolves HEAD without knowing the branch name, which is what
     // lets ingest skip the API entirely.
     let fallback = || Upstream {
@@ -469,9 +522,17 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
         // name, but we still refuse absolute paths and traversal so a poisoned
         // tarball cannot appear as a plausible repo path in results.
         let raw = entry.path()?.to_string_lossy().into_owned();
-        let Some((_, path)) = raw.split_once('/') else {
+        let Some((root, path)) = raw.split_once('/') else {
             continue;
         };
+        // The archive root is `<name>-<ref>/` in the repository's own
+        // spelling, whatever case the caller typed. GitHub serves case
+        // variants without a redirect, so this is the only free signal of the
+        // canonical name; the owner keeps the caller's case, and the store's
+        // case-insensitive index stops variants becoming duplicates.
+        if seen == 0 {
+            repo = canonical_repo(&repo, root);
+        }
         if path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..") {
             continue;
         }
@@ -517,6 +578,18 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
         files_seen: seen,
         rejected,
     })
+}
+
+/// `stored` with its name part respelled the way the archive root spells it.
+fn canonical_repo(stored: &str, archive_root: &str) -> String {
+    let Some((owner, name)) = stored.rsplit_once('/') else {
+        return stored.to_string();
+    };
+    let prefix = archive_root.get(..name.len()).unwrap_or_default();
+    if prefix.eq_ignore_ascii_case(name) && archive_root[name.len()..].starts_with('-') {
+        return format!("{owner}/{prefix}");
+    }
+    stored.to_string()
 }
 
 /// Write a prepared repository into the store.
@@ -576,7 +649,7 @@ mod tests {
             "https://github.com/openai/openai-agents-python",
             "https://github.com/openai/openai-agents-python/",
             "https://github.com/openai/openai-agents-python.git",
-            "https://github.com/openai/openai-agents-python/tree/main/examples",
+            "https://github.com/openai/openai-agents-python/tree/main",
             "https://www.github.com/openai/openai-agents-python#readme",
             "git@github.com:openai/openai-agents-python.git",
             "ssh://git@github.com/openai/openai-agents-python.git",
@@ -602,6 +675,32 @@ mod tests {
             assert!(normalize_repo(bad).is_err(), "accepted {bad:?}");
         }
         Ok(())
+    }
+
+    /// A ref or a subpath would be silently ignored, and an agent that asked
+    /// for `crates/` at `v1.0` must not be told it got it.
+    #[test]
+    fn refuses_refs_and_subpaths() {
+        for input in [
+            "owner/repo@v1.0",
+            "owner/repo#main",
+            "https://github.com/owner/repo/tree/master/crates",
+            "https://github.com/owner/repo/blob/main/src/lib.rs",
+        ] {
+            let error = normalize_repo(input).unwrap_err().to_string();
+            assert!(error.contains("not supported"), "{input:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn archive_root_respells_the_name() {
+        assert_eq!(
+            canonical_repo("burntsushi/RIPGREP", "ripgrep-HEAD"),
+            "burntsushi/ripgrep"
+        );
+        assert_eq!(canonical_repo("a/b", "b-release-1.0"), "a/b");
+        assert_eq!(canonical_repo("a/b", "unrelated-HEAD"), "a/b");
+        assert_eq!(canonical_repo("gitee:a/B", "b-HEAD"), "gitee:a/b");
     }
 }
 

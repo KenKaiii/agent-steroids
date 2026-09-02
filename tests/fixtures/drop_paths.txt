@@ -1,0 +1,66 @@
+# Paths the filters must drop, taken from what `steroids audit` and the
+# retests found still indexed in a 444-repository corpus. Each line is a
+# convention, not a repository: a rule that stops catching one has regressed
+# for every project that uses it. Add a line whenever the audit turns up a
+# new one, alongside the rule that drops it.
+#
+# Test suites by directory
+compiler/testData/codegen/box.kt
+src/test/java/com/example/FooTest.java
+jstests/core/find.js
+compiler/src/jdk.graal.compiler.test/Foo.java
+src/_smoke_tests/a.py
+src/integration_tests/a.rs
+src/integration-test/a.ts
+src/test_data/a.py
+TestProjects/App/Main.cs
+src/testsuite/a.c
+core/testFixtures/kotlin/Foo.kt
+core/testFixturesResources/data.kt
+apps/router-e2e/__e2e__/01-rsc/app/_layout.tsx
+integration/hurl/tests_ok/add_header/add_header.py
+integration/hurl/tests_failed/assert_base64/assert_base64.py
+packages/react-core/src/v1-deprecated/test-helpers/copilot-context.ts
+packages/core/test-utils/src/fsFixture.js
+cli/internal/errors/testutil/match.go
+staging/src/client-go/rest/fake/fake.go
+test-tap/api.js
+spec/models/account.rb
+e2e/login.ts
+src/__tests__/foo.js
+pkg/testing/helper.go
+src/__mocks__/fs.js
+src/mocks/server.ts
+libs/core_testing/checkin/mod.rs
+#
+# Test files by name
+src/FooTests.cs
+src/FooTest.kt
+core/src/parser_tests.rs
+packages/expo/src/foo-test.ts
+src/types.test-d.ts
+src/agent.test.ts
+src/agent.spec.ts
+tests/conftest.py
+tests/test_agent.py
+#
+# Fixtures, samples and stories
+src/__fixtures__/data.js
+samples/client/petstore/go/api.go
+src/Button.stories.tsx
+src/stories/Button.tsx
+#
+# Generated and vendored
+src/types.d.ts
+src/routeTree.gen.ts
+src/__generated__/schema.ts
+src/typed.pyi
+src/api_pb2.py
+src/api.pb.go
+src/libnetdata/json/vendored/jsmn.c
+sdk/packages/llms/src/providers/vendors/anthropic.ts
+vendor/github.com/pkg/errors/errors.go
+node_modules/react/index.js
+dist/bundle.js
+src/app.min.js
+migrations/0001_initial.py

@@ -3,12 +3,24 @@
 //! "Trending" is not a public API, so it is expressed as a search: recently
 //! pushed repositories ordered by stars.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::fetch;
 
 /// GitHub caps a search page at 100 results.
 const MAX_PER_PAGE: usize = 100;
+/// GitHub serves at most 1,000 results per search, so ten full pages.
+const MAX_PAGES: usize = 10;
+
+/// What a discovery run turned up: the new candidates, and how many of the
+/// results were skipped as already indexed so "nothing new" can say why.
+#[derive(Default)]
+pub struct Found {
+    /// Repositories GitHub returned, curation lists excluded.
+    pub found: usize,
+    pub already_indexed: usize,
+    pub new: Vec<Candidate>,
+}
 
 pub struct Candidate {
     pub repo: String,
@@ -84,20 +96,27 @@ pub fn is_curation(repo: &str, description: &str) -> bool {
     PHRASES.iter().any(|phrase| text.contains(phrase))
 }
 
-/// Search GitHub for repositories matching `query`.
+/// Search GitHub for repositories matching `query`, paging until `limit`
+/// repositories not in `known` are in hand or the results run out.
 ///
 /// `query` is raw search qualifiers, e.g. `topic:ai-agents language:python`.
-/// Star and archive filters are appended so every caller gets them.
+/// Star and archive filters are appended so every caller gets them. Paging
+/// matters once a corpus is established: the first hundred results of any
+/// good query are exactly the repositories that were indexed last time, and
+/// without it discovery reports "nothing new" for ever.
 pub fn search(
     query: &str,
     min_stars: u32,
     max_age_months: u32,
     limit: usize,
-) -> Result<Vec<Candidate>> {
+    known: &std::collections::HashSet<String>,
+) -> Result<Found> {
     if query.trim().is_empty() {
         bail!("empty discovery query");
     }
-    let limit = limit.clamp(1, MAX_PER_PAGE);
+    if limit == 0 {
+        bail!("--limit must be at least 1");
+    }
     // Two `stars:` qualifiers are ANDed by GitHub, so appending ours to a query
     // that already has one silently narrows to the intersection. Defer to what
     // the user wrote.
@@ -115,47 +134,73 @@ pub fn search(
     if max_age_months > 0 && !full.contains("pushed:") {
         full.push_str(&format!(" pushed:>{}", days_ago(max_age_months * 30)));
     }
-    let url = format!(
-        "https://api.github.com/search/repositories?q={}&sort=stars&order=desc&per_page={limit}",
-        urlencode(&full)
-    );
-
-    let body = fetch::get_json(&url).context("searching GitHub")?;
-    let payload: serde_json::Value = serde_json::from_str(&body)?;
-    if let Some(message) = payload["message"].as_str() {
-        bail!("GitHub search failed: {message}");
+    let known: std::collections::HashSet<String> =
+        known.iter().map(|name| name.to_lowercase()).collect();
+    let mut result = Found::default();
+    for page in 1..=MAX_PAGES {
+        let url = format!(
+            "https://api.github.com/search/repositories?q={}&sort=stars&order=desc\
+             &per_page={MAX_PER_PAGE}&page={page}",
+            urlencode(&full)
+        );
+        let body = fetch::get_json(&url).map_err(|error| {
+            // 422 is GitHub refusing the qualifiers, not a network fault, and
+            // its body says only "Validation Failed".
+            if error.to_string().contains("422") {
+                anyhow::anyhow!("GitHub rejected the query syntax: {full}")
+            } else {
+                error.context("searching GitHub")
+            }
+        })?;
+        let payload: serde_json::Value = serde_json::from_str(&body)?;
+        if let Some(message) = payload["message"].as_str() {
+            bail!("GitHub search failed: {message}");
+        }
+        let items = payload["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("unexpected search response"))?;
+        for candidate in items.iter().filter_map(candidate_from) {
+            result.found += 1;
+            if known.contains(&candidate.repo.to_lowercase()) {
+                result.already_indexed += 1;
+            } else {
+                result.new.push(candidate);
+            }
+            if result.new.len() >= limit {
+                return Ok(result);
+            }
+        }
+        if items.len() < MAX_PER_PAGE {
+            break;
+        }
     }
+    Ok(result)
+}
 
-    let items = payload["items"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("unexpected search response"))?;
-    Ok(items
-        .iter()
-        .filter_map(|item| {
-            let repo = item["full_name"].as_str()?;
-            // The API is a network boundary; its names still have to survive
-            // the same validation as anything a user types.
-            fetch::validate_repo(repo).ok()?;
+/// One search result as a candidate, or nothing when it is not code.
+fn candidate_from(item: &serde_json::Value) -> Option<Candidate> {
+    let repo = item["full_name"].as_str()?;
+    // The API is a network boundary; its names still have to survive
+    // the same validation as anything a user types.
+    fetch::validate_repo(repo).ok()?;
 
-            let description = item["description"].as_str().unwrap_or("");
-            if is_curation(repo, description) {
-                return None;
-            }
-            // A repository GitHub cannot assign a language to holds no code
-            // worth indexing, whatever its star count.
-            let language = item["language"].as_str()?;
-            if matches!(language, "Markdown" | "Text" | "HTML" | "Jupyter Notebook") {
-                return None;
-            }
-            Some(Candidate {
-                repo: repo.to_string(),
-                stars: item["stargazers_count"].as_i64().unwrap_or(0),
-                pushed_at: item["pushed_at"].as_str().unwrap_or_default().to_string(),
-                language: language.to_string(),
-                description: description.chars().take(100).collect(),
-            })
-        })
-        .collect())
+    let description = item["description"].as_str().unwrap_or("");
+    if is_curation(repo, description) {
+        return None;
+    }
+    // A repository GitHub cannot assign a language to holds no code
+    // worth indexing, whatever its star count.
+    let language = item["language"].as_str()?;
+    if matches!(language, "Markdown" | "Text" | "HTML" | "Jupyter Notebook") {
+        return None;
+    }
+    Some(Candidate {
+        repo: repo.to_string(),
+        stars: item["stargazers_count"].as_i64().unwrap_or(0),
+        pushed_at: item["pushed_at"].as_str().unwrap_or_default().to_string(),
+        language: language.to_string(),
+        description: description.chars().take(100).collect(),
+    })
 }
 
 /// Repositories with recent activity, most-starred first.
@@ -167,14 +212,18 @@ pub fn trending(
     language: Option<&str>,
     min_stars: u32,
     limit: usize,
-) -> Result<Vec<Candidate>> {
+    known: &std::collections::HashSet<String>,
+) -> Result<Found> {
+    if days == 0 {
+        bail!("--days must be at least 1");
+    }
     let since = days_ago(days);
     let mut query = format!("pushed:>{since}");
     if let Some(language) = language {
         query.push_str(&format!(" language:{language}"));
     }
     // Already constrained to recent activity, so no separate age filter.
-    search(&query, min_stars, 0, limit)
+    search(&query, min_stars, 0, limit, known)
 }
 
 /// An ISO date `days` before today, computed from the Unix epoch so no date
@@ -303,7 +352,8 @@ mod tests {
 
     #[test]
     fn rejects_an_empty_query() {
-        assert!(search("   ", 0, 0, 10).is_err());
+        assert!(search("   ", 0, 0, 10, &Default::default()).is_err());
+        assert!(search("topic:ai", 0, 0, 0, &Default::default()).is_err());
     }
 
     #[test]

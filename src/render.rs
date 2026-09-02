@@ -173,8 +173,17 @@ fn is_stale(pushed_at: &str) -> bool {
 /// one-line matches and twenty matches inside deeply nested code differ by an
 /// order of magnitude. Truncating on a real measurement, and saying so, beats
 /// returning whatever a fixed limit happens to produce.
-pub fn render_matches_within(matches: &[Match], header: &str, budget: usize) -> String {
-    let (mut out, shown) = fit_within(matches, budget, |shown| render_matches(shown, header));
+///
+/// `header` is given the number of matches actually shown, so the first line
+/// can say "3 of 20" rather than a count the reader then has to distrust.
+pub fn render_matches_within(
+    matches: &[Match],
+    header: impl Fn(usize) -> String,
+    budget: usize,
+) -> String {
+    let (mut out, shown) = fit_within(matches, budget, |shown| {
+        render_matches(shown, &header(shown.len()))
+    });
     if shown < matches.len() {
         out.push_str(&format!(
             "\n[{} more match(es) omitted to stay within {budget} tokens; \
@@ -372,7 +381,7 @@ mod budget_tests {
     fn budget_is_respected_and_reported() {
         let matches = sample(30);
         for budget in [200usize, 800, 2000] {
-            let out = super::render_matches_within(&matches, "30 match(es)", budget);
+            let out = super::render_matches_within(&matches, |_| "30 match(es)".into(), budget);
             let used = super::estimate_tokens(&out);
             assert!(
                 used <= budget + super::estimate_tokens("[30 more match(es) omitted]") + 40,
@@ -416,7 +425,7 @@ mod budget_tests {
     #[test]
     fn a_generous_budget_shows_everything() {
         let matches = sample(5);
-        let out = super::render_matches_within(&matches, "5 match(es)", 100_000);
+        let out = super::render_matches_within(&matches, |_| "5 match(es)".into(), 100_000);
         assert!(!out.contains("omitted"));
         for i in 0..5 {
             assert!(out.contains(&format!("org/repo{i}")), "lost result {i}");

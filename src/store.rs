@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 // Measured on a 76MB, 12-repository ingest: level 6 produces the same 21MB on
 // disk as level 12 but costs 2.9s of CPU against 34s, and level 19 costs more
@@ -221,6 +221,7 @@ impl Store {
         // Migrations for `stored < SCHEMA_VERSION` go here, before the stamp,
         // and only under the write lock so two processes never race one.
         if for_write && writable {
+            Self::collapse_case_duplicates(&db)?;
             db.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
                 params![SCHEMA_VERSION.to_string().into_bytes()],
@@ -276,6 +277,50 @@ impl Store {
         Ok(store)
     }
 
+    /// GitHub names are case-insensitive, so `BurntSushi/ripgrep` and
+    /// `burntsushi/ripgrep` are one repository. Before the unique index
+    /// existed a corpus could hold both, each with a full copy of the
+    /// documents. Keep the copy indexed last and drop the rest, then add the
+    /// index that stops it recurring. Runs once: the index's existence is the
+    /// marker.
+    fn collapse_case_duplicates(db: &Connection) -> Result<()> {
+        let indexed: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' \
+             AND name = 'repos_name_nocase')",
+            [],
+            |row| row.get(0),
+        )?;
+        if indexed {
+            return Ok(());
+        }
+        db.execute_batch(
+            "BEGIN; \
+             DELETE FROM documents WHERE repo_id IN ( \
+                 SELECT r.id FROM repos r WHERE r.id <> ( \
+                     SELECT k.id FROM repos k WHERE k.name = r.name COLLATE NOCASE \
+                     ORDER BY k.indexed_at DESC, k.id DESC LIMIT 1)); \
+             DELETE FROM repos WHERE id <> ( \
+                 SELECT k.id FROM repos k WHERE k.name = repos.name COLLATE NOCASE \
+                 ORDER BY k.indexed_at DESC, k.id DESC LIMIT 1); \
+             CREATE UNIQUE INDEX IF NOT EXISTS repos_name_nocase \
+                 ON repos(name COLLATE NOCASE); \
+             COMMIT;",
+        )?;
+        Ok(())
+    }
+
+    /// The stored spelling of a repository name, matched case-insensitively.
+    pub fn find_repo(&self, name: &str) -> Result<Option<String>> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT name FROM repos WHERE name = ?1 COLLATE NOCASE",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     // -- writing ------------------------------------------------------------
 
     /// Register a repo, discarding any documents from a previous ingest.
@@ -287,13 +332,20 @@ impl Store {
     /// `--metadata` carries none, and must not erase the last-commit date that
     /// decay depends on.
     pub fn add_repo(&mut self, name: &str, upstream: &crate::fetch::Upstream) -> Result<i64> {
+        // A case variant of an existing row is the same repository. The
+        // spelling already stored wins: tags, scripts and the listing all
+        // refer to it, and re-adding must not rename it under them.
+        let stored = self.find_repo(name)?;
+        let name = stored.as_deref().unwrap_or(name);
         self.db.execute(
             "DELETE FROM documents WHERE repo_id = (SELECT id FROM repos WHERE name = ?1)",
             params![name],
         )?;
+        // RFC 3339 with the Z: SQLite's datetime() is UTC but says nothing,
+        // and a reader on another clock takes it for local time.
         self.db.execute(
             "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived) \
-             VALUES (?1, ?2, datetime('now'), ?3, ?4) \
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
              indexed_at = excluded.indexed_at, \
              files = NULL, source_bytes = NULL, disk_bytes = NULL, \
@@ -567,6 +619,47 @@ impl Store {
         Ok(())
     }
 
+    /// Drop every stored file `keep(path, size)` rejects, returning how many
+    /// went. The index tolerates missing documents and prunes them on its
+    /// next run, so this is how a corpus catches up with a filter change
+    /// without touching the network.
+    pub fn drop_filtered(&mut self, keep: impl Fn(&str, u64) -> bool) -> Result<usize> {
+        let rows: Vec<(i64, String, i64)> = self
+            .db
+            .prepare("SELECT id, path, raw_size FROM documents WHERE offset >= 0")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        let doomed: Vec<i64> = rows
+            .into_iter()
+            .filter(|(_, path, size)| !keep(path, u64::try_from(*size).unwrap_or(0)))
+            .map(|(id, ..)| id)
+            .collect();
+        let tx = self.db.transaction()?;
+        for id in &doomed {
+            tx.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+        }
+        tx.commit()?;
+        self.refresh_repo_stats(false)?;
+        Ok(doomed.len())
+    }
+
+    /// Forget every repository with no indexed files, returning their names.
+    pub fn remove_empty_repos(&mut self) -> Result<Vec<String>> {
+        let empty: Vec<String> = self
+            .db
+            .prepare(
+                "SELECT name FROM repos WHERE NOT EXISTS \
+                 (SELECT 1 FROM documents WHERE repo_id = repos.id AND offset >= 0) \
+                 ORDER BY name",
+            )?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        for name in &empty {
+            self.remove_repo(name)?;
+        }
+        Ok(empty)
+    }
+
     /// Rewrite blobs.bin with only the bytes still referenced.
     ///
     /// Updating a repository appends new content and orphans the old, so the
@@ -805,7 +898,7 @@ impl Store {
                 Ok(RepoSummary {
                     name: row.get(0)?,
                     commit_sha: row.get(1)?,
-                    indexed_at: row.get(2)?,
+                    indexed_at: rfc3339(row.get(2)?),
                     files: row.get(3)?,
                     source_bytes: row.get(4)?,
                     disk_bytes: row.get(5)?,
@@ -819,14 +912,17 @@ impl Store {
     }
 
     /// (path, language, raw size) for the files indexed from one repository.
+    /// `usize::MAX` lists every file.
     pub fn list_files(&self, repo: &str, limit: usize) -> Result<Vec<(String, String, i64)>> {
         let mut statement = self.db.prepare(
             "SELECT d.path, d.language, d.raw_size FROM documents d \
              JOIN repos r ON r.id = d.repo_id \
              WHERE r.name = ?1 AND d.offset >= 0 ORDER BY d.path LIMIT ?2",
         )?;
+        // SQLite reads a negative LIMIT as no limit.
+        let limit = i64::try_from(limit).unwrap_or(-1);
         let rows = statement
-            .query_map(params![repo, limit as i64], |row| {
+            .query_map(params![repo, limit], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -881,6 +977,28 @@ impl Store {
         Ok(updated > 0)
     }
 
+    /// Detach labels from a repository. Labels it never had are ignored.
+    pub fn untag_repo(&mut self, repo: &str, tags: &[String]) -> Result<bool> {
+        let existing: String = self
+            .db
+            .query_row(
+                "SELECT COALESCE(tags, '') FROM repos WHERE name = ?1",
+                params![repo],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        let dropped: Vec<String> = tags.iter().map(|t| t.trim().to_lowercase()).collect();
+        let kept: Vec<&str> = existing
+            .split(',')
+            .filter(|t| !t.is_empty() && !dropped.iter().any(|d| d == t))
+            .collect();
+        let updated = self.db.execute(
+            "UPDATE repos SET tags = ?1 WHERE name = ?2",
+            params![kept.join(","), repo],
+        )?;
+        Ok(updated > 0)
+    }
+
     /// Every language present in the indexed files.
     ///
     /// Taken from the documents rather than each repository's main language: a
@@ -895,19 +1013,26 @@ impl Store {
         Ok(rows)
     }
 
-    /// Whether any indexed file path matches a glob. `None` when the glob
-    /// holds a `[`, which SQLite reads as a class and the search reads
-    /// literally, so this cannot answer for it.
-    pub fn any_path_matches(&self, glob: &str) -> Result<Option<bool>> {
-        if glob.contains('[') {
-            return Ok(None);
-        }
-        let found: bool = self.db.query_row(
+    /// Whether any indexed file path matches a glob.
+    pub fn any_path_matches(&self, glob: &str) -> Result<bool> {
+        Ok(self.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM documents WHERE offset >= 0 AND path GLOB ?1)",
-            params![glob],
+            params![sql_glob(glob)],
             |row| row.get(0),
+        )?)
+    }
+
+    /// (repo, path) for every indexed file. Half a million rows is a few
+    /// tens of megabytes; `audit` is the only caller.
+    pub fn every_path(&self) -> Result<Vec<(String, String)>> {
+        let mut statement = self.db.prepare(
+            "SELECT r.name, d.path FROM documents d JOIN repos r ON r.id = d.repo_id \
+             WHERE d.offset >= 0",
         )?;
-        Ok(Some(found))
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// A few indexed file paths, to show what a path glob has to match.
@@ -1002,6 +1127,23 @@ impl Store {
 
 /// Take an exclusive advisory lock, blocking until it is available.
 ///
+/// A path glob as SQLite's GLOB reads it. Ours treats `[` literally, since
+/// `app/[slug]/page.tsx` is a real path; SQLite reads it as a class unless it
+/// is written `[[]`.
+pub fn sql_glob(glob: &str) -> String {
+    glob.replace('[', "[[]")
+}
+
+/// Rows written before `add_repo` stamped RFC 3339 hold SQLite's
+/// `YYYY-MM-DD HH:MM:SS`, which is UTC but does not say so. Give it the `T`
+/// and `Z` so every reader sees one format.
+fn rfc3339(stamp: String) -> String {
+    if stamp.len() == 19 && stamp.as_bytes()[10] == b' ' {
+        return format!("{}T{}Z", &stamp[..10], &stamp[11..]);
+    }
+    stamp
+}
+
 /// `flock` is used directly because the standard library has no file locking
 /// on stable, and pulling in a dependency for two lines of libc is not worth
 /// it. The lock releases automatically when the file handle closes, including
@@ -1565,6 +1707,71 @@ mod tests {
             "reader accepted a newer corpus: {refused:?}"
         );
         assert!(Store::open_for_write(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// A corpus built before the case-insensitive index can hold the same
+    /// repository under several spellings. Opening for write keeps the copy
+    /// indexed last, with its documents, and never the only copy of anything.
+    #[test]
+    fn collapses_case_variant_repositories() -> Result<()> {
+        let dir = crate::store::scratch_dir("nocase");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let mut store = Store::open_for_write(&dir)?;
+            store.db.execute_batch("DROP INDEX repos_name_nocase")?;
+            for (name, sha, when) in [
+                ("BurntSushi/ripgrep", "old", "2026-01-01T00:00:00Z"),
+                ("burntsushi/ripgrep", "new", "2026-02-01T00:00:00Z"),
+                ("other/repo", "only", "2025-01-01T00:00:00Z"),
+            ] {
+                store.db.execute(
+                    "INSERT INTO repos (name, commit_sha, indexed_at) VALUES (?1, ?2, ?3)",
+                    params![name, sha, when],
+                )?;
+                let id: i64 = store.db.query_row(
+                    "SELECT id FROM repos WHERE name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )?;
+                store.add_document(
+                    id,
+                    "src/lib.rs",
+                    "rust",
+                    format!("fn {sha}() {{}}").repeat(8).into_bytes(),
+                )?;
+            }
+            store.flush_pending()?;
+        }
+
+        let mut store = Store::open_for_write(&dir)?;
+        let names: Vec<String> = store.list_repos()?.into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["burntsushi/ripgrep", "other/repo"]);
+        assert_eq!(
+            store.find_repo("BURNTSUSHI/RIPGREP")?.as_deref(),
+            Some("burntsushi/ripgrep")
+        );
+        assert_eq!(store.find_repo("nobody/here")?, None);
+        let kept = store
+            .read_path("burntsushi/ripgrep", "src/lib.rs")?
+            .unwrap();
+        assert!(kept.starts_with(b"fn new()"), "kept the older copy");
+        assert!(
+            store.read_path("other/repo", "src/lib.rs")?.is_some(),
+            "dropped the only copy"
+        );
+
+        // Re-adding under another spelling reuses the row and its spelling.
+        store.add_repo("BurntSushi/ripgrep", &upstream("again"))?;
+        let names: Vec<String> = store.list_repos()?.into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["burntsushi/ripgrep", "other/repo"]);
+        assert_eq!(store.list_repos()?[0].commit_sha, "again");
+        let when = &store.list_repos()?[0].indexed_at;
+        assert!(
+            when.ends_with('Z') && when.contains('T'),
+            "not RFC 3339: {when}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

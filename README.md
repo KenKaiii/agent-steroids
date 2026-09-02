@@ -102,15 +102,23 @@ I have a local corpus of real open source code at ~/.steroids. Search it
 before writing anything non-trivial, to see how other projects solved the
 same problem.
 
-  steroids search '<regex>' [--tag T] [--repo R] [--language L] [--limit N]
+  steroids search '<regex>' [--tag T] [--repo a/b,c/d] [--language L] [--path src] [--limit N]
+  steroids search -F '$HOME'     literal text instead of a regex
   steroids define <Symbol>       where something is defined
   steroids show <repo> <path> [--from N --to N]   read a file, or one region
+  steroids files <repo>          what is indexed for one repo (tab separated)
   steroids repos                 what is indexed
   steroids recent --tag X        what changed upstream in the last 72 hours
 
-Add --json to search, define or repos for structured output. Output stops at
---max-tokens (default 6000) in both text and JSON; JSON reports the cut as
-`omitted`, separate from `more_available`.
+Repository names and languages are case-insensitive; any form `add` takes
+(URL, owner/name) works for --repo. A --path without glob characters is a
+prefix: `src` means `src/**`.
+
+Add --json to search, define, show, files, repos or discover for structured
+output; a failure with --json is `{"error": "..."}` on stdout, exit 1.
+Output stops at --max-tokens (default 6000) in both text and JSON; text says
+"N of M shown", JSON reports the cut as `omitted`, separate from
+`more_available`.
 
 If a search says the topic is not covered, that is a gap in my corpus, not a
 bad query. Do not retry variations. Instead: run `steroids discover` to find
@@ -145,6 +153,9 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 | `steroids recent --hours 72` | What these projects shipped in the last 3 days |
 | `steroids update` | Pull the latest code. 98 repos in 5.5 seconds |
 | `steroids tag --add rust,cli <repo>` | Label repos so your agent can search just a slice |
+| `steroids tag --remove cli <repo>` | Take a label off again |
+| `steroids audit` | What the filters let through: test-like names still indexed, lopsided repos, empty ones |
+| `steroids index --refilter` | Drop tests/samples/generated files an older version indexed; no network. `compact` afterwards reclaims the disk |
 | `steroids decay` | Auto-drop repos that went quiet. Dry run first |
 | `steroids stats` | What it's costing you in disk |
 | `steroids upgrade` | Install the latest release. `--check` only tells you if there is one |
@@ -206,7 +217,7 @@ STEROIDS_TEST_ROOT=~/.steroids cargo test --release
 
 **How it works.** Repos come down as tarballs straight from codeload, which has no rate limit, so a 500 repo ingest is capped by your bandwidth and nothing else. Files are filtered while the download is still streaming, so the full repo never lands on disk. What survives gets compressed against a shared zstd dictionary trained on your own corpus. Search narrows candidates with a non-positional trigram index, then confirms each hit with a real regex, which is why the index costs a fraction of what a normal one would.
 
-`add`, `update` and `decay` make **zero** GitHub API calls. Code comes from codeload, the head commit from git's own protocol, and the last-commit date out of the archive's file timestamps. None of those are rate limited. `discover` is the one exception: GitHub search allows 10 requests a minute without a token. Set `GITHUB_TOKEN` to raise it.
+`add`, `update` and `decay` make **zero** GitHub API calls. Code comes from codeload, the head commit from git's own protocol, and the last-commit date out of the archive's file timestamps. None of those are rate limited. `discover` is the one exception: GitHub search allows 10 requests a minute without a token. Set `GITHUB_TOKEN` to raise it; when it is unset and the `gh` CLI is logged in, `gh auth token` is used automatically.
 
 `update` checks each repo's latest commit first and only downloads the ones that moved, so the cost scales with how many repos you have rather than how big they are. A repo that fails, renamed, deleted or dropped connection, is reported and skipped; re-running retries only what is missing.
 

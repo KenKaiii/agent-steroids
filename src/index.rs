@@ -66,7 +66,11 @@ pub fn decode(blob: &[u8]) -> Result<Vec<i64>> {
 }
 
 pub struct IndexStats {
+    /// Live documents in the corpus after the run.
     pub documents: usize,
+    /// Documents this run read: everything on a rebuild, the new ones on an
+    /// incremental run.
+    pub added: usize,
     pub trigrams_seen: usize,
     pub trigrams_stored: usize,
 }
@@ -283,6 +287,7 @@ fn build_from(
     let total = total as usize;
     Ok(IndexStats {
         documents: total,
+        added: doc_ids.len(),
         trigrams_seen: seen.len(),
         trigrams_stored: stored,
     })

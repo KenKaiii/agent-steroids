@@ -89,10 +89,13 @@ impl Match {
 
 #[derive(Default)]
 pub struct Query<'a> {
-    pub repo: Option<&'a str>,
+    /// Restrict to these repositories, by stored name. Empty means all.
+    pub repos: &'a [String],
     /// Restrict to repositories carrying this label.
     pub tag: Option<&'a str>,
+    /// The stored language name; see `filters::canonical_language`.
     pub language: Option<&'a str>,
+    /// A glob as `path_filter` produces it.
     pub path_glob: Option<&'a str>,
     pub ignore_case: bool,
     pub skip_comments: bool,
@@ -117,15 +120,28 @@ impl<'a> Query<'a> {
 }
 
 fn is_prose(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    COMMENT_PREFIXES
+    let trimmed = line.trim();
+    if COMMENT_PREFIXES
         .iter()
         .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return true;
+    }
+    // A line that is nothing but one string literal is a one-line docstring
+    // (`"Returns the class object."`). A dict entry or argument carries a
+    // colon, comma or bracket after the closing quote and is kept.
+    let mut chars = trimmed.chars();
+    matches!((chars.next(), chars.next_back()), (Some(q), Some(end)) if q == '"' && end == q && trimmed.len() > 1)
+        && !trimmed[1..trimmed.len() - 1].contains('"')
 }
 
 /// A run of block-comment lines longer than this means the scanner lost sync,
-/// not that a genuine comment is that long. Real docstrings are far shorter.
+/// not that a genuine comment is that long. Python is given more room: a
+/// class docstring with a usage example runs past 60 lines (haystack's
+/// `Agent` is 90), and `"""` inside an ordinary string is rare enough that
+/// desync is the smaller risk there.
 const MAX_BLOCK_COMMENT_LINES: usize = 60;
+const MAX_DOCSTRING_LINES: usize = 200;
 
 /// Python docstring delimiters, named to keep the quoting readable.
 const TRIPLE_DOUBLE: &str = "\"\"\"";
@@ -149,14 +165,17 @@ const TRIPLE_SINGLE: &str = "'''";
 fn prose_lines(lines: &[&str], language: &str) -> HashSet<usize> {
     // Docstring syntax is per-language; looking for the wrong delimiters is
     // what desynchronises the scanner.
-    let delimiters: &[(&str, &str)] = match language {
-        "python" => &[
-            (TRIPLE_DOUBLE, TRIPLE_DOUBLE),
-            (TRIPLE_SINGLE, TRIPLE_SINGLE),
-        ],
-        "ruby" | "shell" | "elixir" | "lua" | "sql" => &[],
+    let (delimiters, max_lines): (&[(&str, &str)], usize) = match language {
+        "python" => (
+            &[
+                (TRIPLE_DOUBLE, TRIPLE_DOUBLE),
+                (TRIPLE_SINGLE, TRIPLE_SINGLE),
+            ],
+            MAX_DOCSTRING_LINES,
+        ),
+        "ruby" | "shell" | "elixir" | "lua" | "sql" => (&[], 0),
         // C-family and everything else that uses /* */.
-        _ => &[("/*", "*/")],
+        _ => (&[("/*", "*/")], MAX_BLOCK_COMMENT_LINES),
     };
     if delimiters.is_empty() {
         return HashSet::new();
@@ -192,7 +211,7 @@ fn prose_lines(lines: &[&str], language: &str) -> HashSet<usize> {
                 if trimmed.contains(closer) {
                     marked.extend(pending.drain(..));
                     inside = None;
-                } else if number - opened_at > MAX_BLOCK_COMMENT_LINES {
+                } else if number - opened_at > max_lines {
                     // Almost certainly a delimiter inside a string literal.
                     // Discard the run rather than hide the rest of the file.
                     pending.clear();
@@ -931,22 +950,28 @@ fn unnarrowed_candidates(
     let mut repo_binds: Vec<&String> = Vec::new();
     let mut doc_sql = String::from("SELECT id FROM documents WHERE repo_id = ?1 AND offset >= 0");
     let mut doc_binds: Vec<&String> = Vec::new();
-    // Binds were pushed in this order above: repo, tag, language, glob. The
+    // Binds were pushed in this order above: repos, tag, language, glob. The
     // first two belong to repositories, the rest to documents.
     let mut bind = binds.iter();
-    if query.repo.is_some() {
-        repo_sql.push_str(" AND r.name = ?");
-        repo_binds.push(bind.next().expect("repo bind"));
+    if !query.repos.is_empty() {
+        repo_sql.push_str(&format!(
+            " AND r.name IN ({})",
+            placeholders(query.repos.len())
+        ));
+        repo_binds.extend(bind.by_ref().take(query.repos.len()));
     }
     if query.tag.is_some() {
-        repo_sql.push_str(" AND ',' || COALESCE(r.tags, '') || ',' LIKE ?");
+        repo_sql.push_str(&format!(
+            " AND ',' || COALESCE(r.tags, '') || ',' LIKE ?{}",
+            repo_binds.len() + 1
+        ));
         repo_binds.push(bind.next().expect("tag bind"));
     }
     if query.language.is_some() {
         doc_sql.push_str(&format!(" AND language = ?{}", doc_binds.len() + 2));
         doc_binds.push(bind.next().expect("language bind"));
     }
-    if query.path_glob.is_some_and(|glob| !glob.contains('[')) {
+    if query.path_glob.is_some() {
         doc_sql.push_str(&format!(" AND path GLOB ?{}", doc_binds.len() + 2));
         doc_binds.push(bind.next().expect("glob bind"));
     }
@@ -1075,6 +1100,72 @@ fn hydrate_candidates(store: &Store, ids: &[i64]) -> Result<Vec<(i64, String, St
         .collect())
 }
 
+/// The regex `define` runs: definition syntax across the indexed languages.
+///
+/// A definition is a keyword, then the name as a whole word, then whatever
+/// opens the body: `(`, `:`, `=`, `<`, `{`, `[`, the end of the line, or a
+/// clause like `extends`. Without that tail `let ToolCallResult = parse(x)`
+/// and `if let Some(result) = ...` are definitions too, and `define` returns
+/// the first place a value was bound instead of where the type lives. The
+/// second branch covers languages that assign instead of declaring, like
+/// `const Foo = (` or `Bar := func(`.
+pub fn definition_pattern(symbol: &str) -> String {
+    let escaped = regex::escape(symbol);
+    format!(
+        r"(?m)\b(def|class|func|fn|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}(\s*(\(|:|=|<|\{{|\[|$)|\s+(where|extends|implements|struct|interface|\{{))|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
+    )
+}
+
+/// Lines the definition pattern matches that are still not definitions:
+/// destructuring, matching and imports bind a name without defining it, and
+/// a definition quoted inside a string literal (parser test fixtures are
+/// full of them) defines nothing.
+pub fn is_binding_not_definition(line: &str, symbol: &str) -> bool {
+    const BINDINGS: &[&str] = &[
+        "if let ", "match ", "case ", "var _", "let _", "return ", "import ", "from ", "use ",
+    ];
+    let trimmed = line.trim_start();
+    if BINDINGS.iter().any(|prefix| trimmed.starts_with(prefix)) {
+        return true;
+    }
+    // An odd number of double quotes or backticks before the name puts it
+    // inside a string. Single quotes are left out: Rust lifetimes (`impl<'a>
+    // Foo<'a>`) would count as an open string.
+    line.find(symbol).is_some_and(|at| {
+        line[..at]
+            .chars()
+            .filter(|c| *c == '"' || *c == '`')
+            .count()
+            % 2
+            == 1
+    })
+}
+
+/// `?1,?2,...,?n`: one numbered placeholder per bound value.
+fn placeholders(count: usize) -> String {
+    (1..=count)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Turn a `--path` value into the glob the store understands.
+///
+/// A value with no glob character is a prefix: `src` and `src/` both mean
+/// `src/**`, which is what everyone who types a directory expects. Paths
+/// are relative to the repository root, so a leading `/` is dropped rather
+/// than left to match nothing.
+pub fn path_filter(value: &str) -> Result<String> {
+    let trimmed = value.trim().trim_start_matches('/');
+    if trimmed.is_empty() {
+        bail!("--path must not be empty");
+    }
+    if trimmed.contains(['*', '?', '[']) {
+        return Ok(trimmed.to_string());
+    }
+    Ok(format!("{}/**", trimmed.trim_end_matches('/')))
+}
+
 pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchResults> {
     if pattern.len() > MAX_PATTERN_LENGTH {
         bail!("pattern too long");
@@ -1093,7 +1184,19 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     let matcher = RegexBuilder::new(pattern)
         .case_insensitive(query.ignore_case)
         .build()
-        .map_err(|error| anyhow!("invalid pattern: {error}"))?;
+        .map_err(|error| {
+            // The regex crate's own message is a paragraph about which syntax
+            // it does not support; the caller needs to know it is a rewrite.
+            let text = error.to_string();
+            if text.contains("look-around") || text.contains("backreference") {
+                anyhow!(
+                    "cannot match: look-around and backreferences are not supported; \
+                     rewrite the pattern without them"
+                )
+            } else {
+                anyhow!("invalid pattern: {error}")
+            }
+        })?;
 
     // Scanning a pattern that needs a newline reads every candidate line by
     // line to prove what the pattern already says: it cannot match. Measured at
@@ -1155,9 +1258,12 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     if let Some(list) = inline_ids {
         sql.push_str(&format!(" AND d.id IN ({list})"));
     }
-    if let Some(repo) = query.repo {
-        sql.push_str(" AND r.name = ?");
-        binds.push(repo.to_string());
+    if !query.repos.is_empty() {
+        sql.push_str(&format!(
+            " AND r.name IN ({})",
+            placeholders(query.repos.len())
+        ));
+        binds.extend(query.repos.iter().cloned());
     }
     if let Some(tag) = query.tag {
         // Tags are stored comma separated, so wrap both sides to match a whole
@@ -1172,12 +1278,11 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
         sql.push_str(&format!(" AND d.language = ?{}", binds.len() + 1));
         binds.push(language.to_string());
     }
-    // SQLite's GLOB agrees with ours on * and ? but reads [ as a class where
-    // ours reads it literally, so such a glob stays in Rust below. Everything
-    // else is filtered here so it does not eat into the candidate budget.
-    if let Some(glob) = query.path_glob.filter(|glob| !glob.contains('[')) {
+    // Filtered in SQL so the glob does not eat into the candidate budget;
+    // `sql_glob` keeps SQLite reading `[` the way this module does.
+    if let Some(glob) = query.path_glob {
         sql.push_str(&format!(" AND d.path GLOB ?{}", binds.len() + 1));
-        binds.push(glob.to_string());
+        binds.push(crate::store::sql_glob(glob));
     }
     let (candidate_ids, capped) =
         if let Some(ids) = narrowed.as_ref().filter(|ids| ids.len() > SQL_ID_LIMIT) {
@@ -1511,19 +1616,46 @@ mod tests {
     /// returning one sends the reader to the wrong file.
     #[test]
     fn definition_pattern_requires_whole_word() {
-        let escaped = regex::escape("ToolCallResult");
-        let pattern = format!(
-            r"\b(def|class|func|fn|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}\b|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
-        );
-        let re = regex::Regex::new(&pattern).expect("valid");
-        assert!(re.is_match("interface ToolCallResult {"));
-        assert!(re.is_match("type ToolCallResult struct {"));
-        assert!(re.is_match("const ToolCallResult = ("));
-        assert!(
-            !re.is_match("export const parseToolCallResult = ("),
-            "matched a use as a definition"
-        );
-        assert!(!re.is_match("return handleToolCallResult(x)"));
+        let re = regex::Regex::new(&definition_pattern("ToolCallResult")).expect("valid");
+        for line in [
+            "interface ToolCallResult {",
+            "type ToolCallResult struct {",
+            "const ToolCallResult = (",
+            "def ToolCallResult(self):",
+            "class ToolCallResult:",
+            "class ToolCallResult(Base):",
+            "pub struct ToolCallResult<'a> {",
+            "fn ToolCallResult() -> u8 {",
+            "type ToolCallResult = string;",
+            "public class ToolCallResult extends Base {",
+            "enum ToolCallResult",
+            "export const ToolCallResult: Foo = {",
+        ] {
+            assert!(re.is_match(line), "missed definition: {line}");
+        }
+        for line in [
+            "export const parseToolCallResult = (",
+            "return handleToolCallResult(x)",
+            "const ToolCallResult, other = pair;",
+            "let ToolCallResult;",
+        ] {
+            assert!(!re.is_match(line), "matched a use as a definition: {line}");
+        }
+        for line in [
+            "    if let Some(ToolCallResult) = x {",
+            "from x import ToolCallResult",
+            r#"    ("ToolCallResult = function(){};", Fixture),"#,
+            "    `const ToolCallResult = () => {}`,",
+        ] {
+            assert!(is_binding_not_definition(line, "ToolCallResult"), "{line}");
+        }
+        for line in [
+            "class ToolCallResult:",
+            r#"const ToolCallResult = ("x", () => {"#,
+            "impl<'a> ToolCallResult<'a> {",
+        ] {
+            assert!(!is_binding_not_definition(line, "ToolCallResult"), "{line}");
+        }
     }
 
     /// A delimiter inside a string literal must not convince the scanner that
@@ -1637,8 +1769,9 @@ mod tests {
             println!("SKIP: corpus has no Python-like code");
             return Ok(());
         };
+        let repos = [repo];
         let query = super::Query {
-            repo: Some(&repo),
+            repos: &repos,
             ..super::Query::new(6)
         };
         let hits = super::search(&mut store, "def ", &query)?;
@@ -1742,10 +1875,17 @@ mod tests {
             "\"model\": Model(max_retries=3),",
             "*ptr = value;",
             "'key': 1,",
+            "\"a\" + \"b\"",
+            "\"",
         ] {
             assert!(!is_prose(code), "real code flagged as prose: {code}");
         }
-        for prose in ["# a comment", "// a comment", "-- sql comment"] {
+        for prose in [
+            "# a comment",
+            "// a comment",
+            "-- sql comment",
+            "    \"Returns the class object from name string\"",
+        ] {
             assert!(is_prose(prose), "comment not detected: {prose}");
         }
     }
@@ -1755,5 +1895,16 @@ mod tests {
         assert!(glob_matches("src/*.py", "src/agent.py"));
         assert!(glob_matches("*/agent.py", "src/agent.py"));
         assert!(!glob_matches("src/*.py", "src/agent.rs"));
+    }
+
+    #[test]
+    fn path_prefixes_become_globs() -> Result<()> {
+        for prefix in ["src", "src/", "/src/", " src "] {
+            assert_eq!(path_filter(prefix)?, "src/**", "{prefix:?}");
+        }
+        assert_eq!(path_filter("src/**/*.py")?, "src/**/*.py");
+        assert!(glob_matches(&path_filter("src")?, "src/deep/agent.py"));
+        assert!(path_filter("/").is_err());
+        Ok(())
     }
 }
