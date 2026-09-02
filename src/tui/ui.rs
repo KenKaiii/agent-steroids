@@ -399,7 +399,11 @@ fn draw_modal(frame: &mut Frame, app: &App) {
             input.value().to_string(),
             "absolute path; empty = default ~/.steroids   ↵ use   esc cancel",
         ),
-        Modal::Working(progress) => ("Working", progress.clone(), "please wait…"),
+        Modal::Working(progress) => (
+            "Working",
+            progress.clone(),
+            "esc stop after current download",
+        ),
     };
 
     let area = centered(frame.area(), 62, 7);

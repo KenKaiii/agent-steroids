@@ -4,6 +4,8 @@
 //! worker thread and report progress by channel, so the draw loop never blocks.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::thread;
 
@@ -22,7 +24,7 @@ pub enum Msg {
 ///
 /// A worker cannot share the caller's `Store`: rusqlite connections are not
 /// `Sync`, so it opens its own handle against the same directory.
-pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
+pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut store = match Store::open(&root) {
             Ok(store) => store,
@@ -41,6 +43,7 @@ pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
             false,
             bulk::DEFAULT_PARALLEL,
             &Default::default(),
+            &cancel,
             &mut |name, result, done, total| {
                 let _ = progress.send(Msg::Progress(match result {
                     Ok(prepared) => {
@@ -50,9 +53,10 @@ pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
                 }));
             },
         );
-        let (added, failure) = match outcome {
+        let (added, skipped, failure) = match outcome {
             Ok(outcome) => (
                 outcome.added,
+                outcome.skipped,
                 outcome
                     .failed
                     .first()
@@ -64,25 +68,31 @@ pub fn add_repos(root: PathBuf, names: Vec<String>, tx: Sender<Msg>) {
             }
         };
 
+        // A cancelled batch still indexes what landed: those repositories
+        // are on disk and would otherwise be invisible until the next job.
         if added > 0
             && let Err(error) = rebuild(&mut store, &tx)
         {
             let _ = tx.send(Msg::Failed(format!("indexing failed: {error}")));
             return;
         }
+        let summary = format!(
+            "added {added} repositor{}",
+            if added == 1 { "y" } else { "ies" }
+        );
         let _ = match failure {
-            Some(reason) if added == 0 => tx.send(Msg::Failed(reason)),
-            Some(reason) => tx.send(Msg::Failed(format!("added {added}, but {reason}"))),
-            None => tx.send(Msg::Done(format!(
-                "added {added} repositor{}",
-                if added == 1 { "y" } else { "ies" }
+            _ if skipped > 0 => tx.send(Msg::Done(format!(
+                "cancelled: {summary}, {skipped} not started"
             ))),
+            Some(reason) if added == 0 => tx.send(Msg::Failed(reason)),
+            Some(reason) => tx.send(Msg::Failed(format!("{summary}, but {reason}"))),
+            None => tx.send(Msg::Done(summary)),
         };
     });
 }
 
 /// Re-fetch every indexed repository, reclaim orphaned bytes, reindex.
-pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
+pub fn update_all(root: PathBuf, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut store = match Store::open(&root) {
             Ok(store) => store,
@@ -118,17 +128,21 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
         // A repository that has been deleted or renamed upstream must not stop
         // the rest from updating.
         let progress = tx.clone();
-        let failed: Vec<String> = match bulk::ingest_all(
+        let (failed, skipped): (Vec<String>, usize) = match bulk::ingest_all(
             &mut store,
             &names,
             false,
             bulk::DEFAULT_PARALLEL,
             &known,
+            &cancel,
             &mut |name, _, done, total| {
                 let _ = progress.send(Msg::Progress(format!("updating {done}/{total}  {name}")));
             },
         ) {
-            Ok(outcome) => outcome.failed.into_iter().map(|(name, _)| name).collect(),
+            Ok(outcome) => (
+                outcome.failed.into_iter().map(|(name, _)| name).collect(),
+                outcome.skipped,
+            ),
             Err(error) => {
                 let _ = tx.send(Msg::Failed(error.to_string()));
                 return;
@@ -137,6 +151,9 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
 
         let _ = tx.send(Msg::Progress("reclaiming space…".into()));
         // Replaced content orphans its old bytes, so reclaim before reindexing.
+        // Compaction and reindex are not skipped on cancel: replaced content
+        // has already orphaned its old bytes, and new content is unsearchable
+        // until indexed. Cancel bounds the downloads, not the bookkeeping.
         if let Err(error) = store.compact() {
             let _ = tx.send(Msg::Failed(format!("compaction failed: {error}")));
             return;
@@ -145,8 +162,12 @@ pub fn update_all(root: PathBuf, tx: Sender<Msg>) {
             let _ = tx.send(Msg::Failed(format!("indexing failed: {error}")));
             return;
         }
-        let updated = names.len() - failed.len();
-        let _ = if failed.is_empty() {
+        let updated = names.len() - failed.len() - skipped;
+        let _ = if skipped > 0 {
+            tx.send(Msg::Done(format!(
+                "cancelled: updated {updated}, {skipped} not started"
+            )))
+        } else if failed.is_empty() {
             tx.send(Msg::Done(format!("updated {updated} repositories")))
         } else {
             tx.send(Msg::Failed(format!(

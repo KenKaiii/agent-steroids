@@ -1621,6 +1621,7 @@ fn ingest_all(
         include_tests,
         parallel,
         known,
+        bulk::never(),
         &mut |name, result, done, total| match result {
             Ok(prepared) => {
                 if terse {

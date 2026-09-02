@@ -286,7 +286,63 @@ mod edge_cases {
 mod jobs {
     use super::app::App;
     use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
+
+    /// Esc during a job raises the cancel flag once; the batch stops claiming
+    /// work, writes nothing it never fetched, and reports as finished rather
+    /// than failed. No network: the flag is raised before the first claim.
+    #[test]
+    fn esc_cancels_a_running_job_cleanly() -> Result<()> {
+        let dir = crate::store::scratch_dir("jobcancel");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
+
+        // The key path: Working + Esc raises the flag and says so.
+        app.modal = super::app::Modal::Working("3/100  x".into());
+        app.on_key(KeyEvent::from(KeyCode::Esc))?;
+        assert!(app.cancel.load(Ordering::Relaxed));
+        let super::app::Modal::Working(text) = &app.modal else {
+            panic!("Esc must keep the progress modal up");
+        };
+        assert!(text.starts_with("cancelling"), "{text}");
+
+        // The job path: a raised flag skips every repository, so the batch
+        // needs no network and reports what it did not start.
+        let cancel = Arc::new(AtomicBool::new(true));
+        let names: Vec<String> = (0..5).map(|i| format!("nobody/repo{i}")).collect();
+        let outcome = crate::bulk::ingest_all(
+            &mut app.store,
+            &names,
+            false,
+            2,
+            &Default::default(),
+            &cancel,
+            &mut |_, _, _, _| {},
+        )?;
+        assert_eq!((outcome.added, outcome.skipped), (0, 5));
+        assert!(outcome.failed.is_empty());
+
+        super::job::add_repos(dir.clone(), names, app.tx.clone(), cancel);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline && app.status.is_empty() {
+            app.poll_jobs()?;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            app.status.starts_with("cancelled") && app.status.contains("5 not started"),
+            "{}",
+            app.status
+        );
+        assert!(app.repos.is_empty());
+
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 
     /// The background jobs behind the interactive keys are the only paths that
     /// write to a corpus without going through the CLI, and nothing else
@@ -323,6 +379,7 @@ mod jobs {
             dir.clone(),
             vec!["antirez/smallchat".into()],
             app.tx.clone(),
+            Arc::new(AtomicBool::new(false)),
         );
         let status = settle(&mut app)?;
         assert!(
@@ -367,6 +424,7 @@ mod jobs {
             dir.clone(),
             vec!["definitely-not-a-real-org-xyz/nope".into()],
             app.tx.clone(),
+            Arc::new(AtomicBool::new(false)),
         );
         let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline && app.status.is_empty() {
@@ -383,6 +441,52 @@ mod jobs {
             "the interface was left showing progress after a failure"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// Cancel after the first repository lands: it must be indexed and
+    /// searchable, the rest never started.
+    #[test]
+    fn cancelling_mid_batch_keeps_what_landed() -> Result<()> {
+        if std::env::var("STEROIDS_NETWORK_TESTS").is_err() {
+            println!("SKIP: set STEROIDS_NETWORK_TESTS=1 (needs GitHub)");
+            return Ok(());
+        }
+        let dir = crate::store::scratch_dir("jobcancel-live");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let mut app = App::new(dir.clone(), Store::open(&dir)?)?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        // More names than workers, or every one is claimed before the first
+        // lands and there is nothing left to skip.
+        let mut names = vec!["antirez/smallchat".to_string()];
+        names.extend((0..40).map(|i| format!("antirez/does-not-exist-{i}")));
+        super::job::add_repos(dir.clone(), names, app.tx.clone(), Arc::clone(&cancel));
+
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline && app.status.is_empty() {
+            app.poll_jobs()?;
+            // `poll_jobs` drains several messages at once, so "1/41" may
+            // never be the one on screen; any counted progress will do.
+            if let super::app::Modal::Working(text) = &app.modal
+                && text.contains('/')
+            {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        println!("status: {}", app.status);
+        assert!(
+            app.status.starts_with("cancelled") && app.status.contains("not started"),
+            "{}",
+            app.status
+        );
+        assert_eq!(app.repos.len(), 1);
+        let hits =
+            crate::search::search(&mut app.store, "int main", &crate::search::Query::new(3))?;
+        assert!(!hits.matches.is_empty(), "landed repo not searchable");
+        drop(app);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

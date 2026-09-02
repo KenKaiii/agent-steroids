@@ -1,6 +1,8 @@
 //! Interactive state: what is on screen and what the keys do.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use anyhow::Result;
@@ -90,6 +92,10 @@ pub struct App {
 
     pub tx: Sender<Msg>,
     pub rx: Receiver<Msg>,
+    /// Raised by Esc while a job runs; the job stops claiming work, finishes
+    /// what is in flight, and indexes what landed. Fresh for every job so a
+    /// stale cancel never stops the next one.
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl App {
@@ -120,9 +126,15 @@ impl App {
             highlighter: Highlighter::default(),
             tx,
             rx,
+            cancel: Arc::new(AtomicBool::new(false)),
         };
         app.reload_repos()?;
         Ok(app)
+    }
+
+    fn fresh_cancel(&mut self) -> Arc<AtomicBool> {
+        self.cancel = Arc::new(AtomicBool::new(false));
+        Arc::clone(&self.cancel)
     }
 
     pub fn reload_repos(&mut self) -> Result<()> {
@@ -338,8 +350,13 @@ impl App {
 
         match std::mem::replace(&mut self.modal, Modal::None) {
             Modal::Working(text) => {
-                // Nothing to do but wait; keep showing progress.
-                self.modal = Modal::Working(text);
+                // Esc asks the job to stop after the downloads in flight;
+                // the progress line keeps updating until it does.
+                if key.code == KeyCode::Esc && !self.cancel.swap(true, Ordering::Relaxed) {
+                    self.modal = Modal::Working(format!("cancelling after current…  {text}"));
+                } else {
+                    self.modal = Modal::Working(text);
+                }
                 return Ok(());
             }
             Modal::AddRepo(mut input) => {
@@ -357,7 +374,12 @@ impl App {
                             return Ok(());
                         }
                         self.modal = Modal::Working("starting…".into());
-                        job::add_repos(self.root.clone(), names, self.tx.clone());
+                        job::add_repos(
+                            self.root.clone(),
+                            names,
+                            self.tx.clone(),
+                            self.fresh_cancel(),
+                        );
                     }
                     KeyCode::Esc => {}
                     _ => {
@@ -425,7 +447,7 @@ impl App {
             }
             KeyCode::Char('u') => {
                 self.modal = Modal::Working("starting…".into());
-                job::update_all(self.root.clone(), self.tx.clone());
+                job::update_all(self.root.clone(), self.tx.clone(), self.fresh_cancel());
             }
             KeyCode::Char('l') => self.open_location_picker(),
             _ => {}

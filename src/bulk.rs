@@ -5,7 +5,7 @@
 //! So fetch many at once on worker threads, and hand the decoded files to a
 //! single writer that owns the store.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::thread;
 
@@ -44,6 +44,14 @@ pub struct BulkOutcome {
     pub rejected: Vec<String>,
     /// Repositories already at the upstream commit, so not re-downloaded.
     pub unchanged: usize,
+    /// Repositories never started because `cancel` was raised.
+    pub skipped: usize,
+}
+
+/// A flag that is never raised, for callers with no way to cancel.
+pub fn never() -> &'static AtomicBool {
+    static NEVER: AtomicBool = AtomicBool::new(false);
+    &NEVER
 }
 
 /// Fetch every repository, writing each as it arrives.
@@ -53,12 +61,18 @@ pub struct BulkOutcome {
 ///
 /// `known` maps repository to the commit already held, letting an update skip
 /// anything upstream has not moved. Empty for a fresh add.
+///
+/// Raising `cancel` stops workers claiming further repositories; the ones
+/// already downloading finish and are written, so nothing fetched is lost
+/// and the caller can still index what landed. A download in flight is not
+/// interrupted, so cancelling takes up to one fetch to take effect.
 pub fn ingest_all(
     store: &mut Store,
     names: &[String],
     include_tests: bool,
     parallel: usize,
     known: &std::collections::HashMap<String, String>,
+    cancel: &AtomicBool,
     report: Progress<'_>,
 ) -> Result<BulkOutcome> {
     let total = names.len();
@@ -70,6 +84,7 @@ pub fn ingest_all(
             bytes: 0,
             rejected: Vec::new(),
             unchanged: 0,
+            skipped: 0,
         });
     }
 
@@ -102,6 +117,9 @@ pub fn ingest_all(
             let cursor = &cursor;
             scope.spawn(move || {
                 loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
                     let index = cursor.fetch_add(1, Ordering::Relaxed);
                     let Some(name) = names.get(index) else {
                         return;
@@ -127,6 +145,7 @@ pub fn ingest_all(
             bytes: 0,
             rejected: Vec::new(),
             unchanged: 0,
+            skipped: 0,
         };
         let mut done = 0usize;
         for (name, prepared) in rx {
@@ -180,6 +199,7 @@ pub fn ingest_all(
                 }
             }
         }
+        outcome.skipped = total - done;
         Ok(outcome)
     })?;
 
