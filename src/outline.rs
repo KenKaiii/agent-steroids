@@ -419,7 +419,8 @@ pub struct ShowRequest<'a> {
 }
 
 /// Looks up the helpers shown lines use; a hook so tests need no corpus.
-pub type UsesLookup<'a> = dyn FnMut(&[(usize, usize)]) -> crate::deps::Uses + 'a;
+/// Called with the shown blocks and the character budget for helpers.
+pub type UsesLookup<'a> = dyn FnMut(&[(usize, usize)], usize) -> crate::deps::Uses + 'a;
 
 /// `lines[start..=end]` without comment lines or blank ones, as runs.
 fn without_comments(
@@ -663,7 +664,10 @@ pub fn render_show(
 
     // Code was shown: add what it calls, so the next hop is not a call.
     let uses = if request.uses && !outlined && !blocks.is_empty() {
-        lookup(&blocks)
+        lookup(
+            &blocks,
+            crate::deps::uses_cap(printed_chars(lines, &blocks)),
+        )
     } else {
         crate::deps::Uses::default()
     };
@@ -1100,7 +1104,7 @@ export default {
     }
 
     fn render_show_noop(lines: &[&str], request: &ShowRequest) -> anyhow::Result<String> {
-        render_show(lines, request, &mut |_| crate::deps::Uses::default())
+        render_show(lines, request, &mut |_, _| crate::deps::Uses::default())
     }
 
     fn request<'a>(symbols: &'a [String]) -> ShowRequest<'a> {

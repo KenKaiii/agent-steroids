@@ -1248,7 +1248,7 @@ fn hydrate_candidates(store: &Store, ids: &[i64]) -> Result<Vec<(i64, String, St
 pub fn definition_pattern(symbol: &str) -> String {
     let escaped = regex::escape(symbol);
     format!(
-        r"(?m)\b(def|class|func|fn|function\*?|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}(\s*(\(|:|=|<|\{{|\[|$)|\s+(where|extends|implements|struct|interface|\{{))|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
+        r"(?m)\b(def|class|func|fn|function\*?|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}(\s*(\(|:|=|<|\{{|\[|$)|\s+(where|extends|implements|struct|interface|\{{))|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)|^\s*func\s+\([^)]*\)\s+{escaped}\s*[\[(]"
     )
 }
 
@@ -1790,6 +1790,9 @@ mod tests {
             "export default function ToolCallResult(a) {",
             "export async function ToolCallResult() {",
             "function* ToolCallResult() {",
+            // Go methods: the receiver comes between `func` and the name.
+            "func (store *RateLimiterMemoryStore) ToolCallResult(identifier string) (bool, error) {",
+            "func (t throttler) ToolCallResult[T any](w T) {",
         ] {
             assert!(re.is_match(line), "missed definition: {line}");
         }

@@ -10,8 +10,16 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::outline::{comment_lines, declared_name, definitions, numbered, outline};
 
-/// Characters the uses section may add to a read.
+/// Most characters the uses section may add to a read. It is also never more
+/// than the code read itself (at least [`USES_FLOOR_CHARS`]): a ten-line
+/// range does not need five thousand characters of helpers.
 pub const USES_CAP_CHARS: usize = 5_000;
+pub const USES_FLOOR_CHARS: usize = 1_500;
+
+/// The uses budget for a read that printed `shown_chars` characters of code.
+pub fn uses_cap(shown_chars: usize) -> usize {
+    shown_chars.clamp(USES_FLOOR_CHARS, USES_CAP_CHARS)
+}
 
 /// A helper with this many code lines or fewer is shown whole; a longer one
 /// as its outline, or named if it has none.
@@ -46,6 +54,8 @@ pub struct Uses {
     pub named: Vec<(String, String, usize, usize)>,
     /// Helpers the caller said it already has (`--skip-uses`), by name only.
     pub earlier: Vec<(String, String, usize)>,
+    /// The budget the shown helpers were packed into.
+    pub cap: usize,
     files: BTreeMap<String, String>,
 }
 
@@ -388,10 +398,14 @@ pub fn uses(
     text: &str,
     shown: &[(usize, usize)],
     skip: &HashSet<(String, usize)>,
+    cap: usize,
     read: &mut dyn FnMut(&str) -> Option<String>,
 ) -> Uses {
     let language = crate::filters::language_of(path).unwrap_or("");
-    let mut result = Uses::default();
+    let mut result = Uses {
+        cap,
+        ..Uses::default()
+    };
     // A test's imports are the code under test, which the reader is
     // already studying; adding it to every test read repeated the library.
     if shown.is_empty() || crate::outline::is_test_path(path) {
@@ -562,7 +576,7 @@ pub fn uses(
         let candidate = &candidates[i];
         // An outline that is only the first line says nothing a name doesn't.
         let informative = candidate.whole || candidate.lines.len() > 1;
-        if informative && used + candidate.cost <= USES_CAP_CHARS {
+        if informative && used + candidate.cost <= cap {
             used += candidate.cost;
             chosen.push(i);
         } else {
@@ -644,7 +658,8 @@ impl Uses {
                 .map(|(path, name, start, end)| format!("{name} ({path}:{start}-{end})"))
                 .collect();
             out.push_str(&format!(
-                "\n# also uses, past the {USES_CAP_CHARS}-character cap: {}\n",
+                "\n# also uses, past the {}-character cap: {}\n",
+                self.cap,
                 names.join(", ")
             ));
         }
@@ -712,9 +727,14 @@ mod tests {
     fn run(path: &str, shown: &[(usize, usize)]) -> Uses {
         let files = repo();
         let text = files[path];
-        uses(path, text, shown, &HashSet::new(), &mut |candidate| {
-            files.get(candidate).map(|s| s.to_string())
-        })
+        uses(
+            path,
+            text,
+            shown,
+            &HashSet::new(),
+            USES_CAP_CHARS,
+            &mut |candidate| files.get(candidate).map(|s| s.to_string()),
+        )
     }
 
     #[test]
@@ -753,9 +773,14 @@ mod tests {
         let files = repo();
         let path = "lib/helpers/toFormData.js";
         let skip = HashSet::from([("lib/utils.js".to_string(), 7usize)]);
-        let found = uses(path, files[path], &[(9, 15)], &skip, &mut |candidate| {
-            files.get(candidate).map(|s| s.to_string())
-        });
+        let found = uses(
+            path,
+            files[path],
+            &[(9, 15)],
+            &skip,
+            USES_CAP_CHARS,
+            &mut |candidate| files.get(candidate).map(|s| s.to_string()),
+        );
         assert!(found.shown.iter().all(|helper| helper.name != "forEach"));
         assert!(
             found
@@ -764,6 +789,13 @@ mod tests {
         );
         // Not followed through either: isHole came only via forEach.
         assert!(found.shown.iter().all(|helper| helper.name != "isHole"));
+    }
+
+    #[test]
+    fn uses_budget_follows_the_size_of_the_read() {
+        assert_eq!(uses_cap(300), USES_FLOOR_CHARS);
+        assert_eq!(uses_cap(3_000), 3_000);
+        assert_eq!(uses_cap(40_000), USES_CAP_CHARS);
     }
 
     #[test]
@@ -777,6 +809,7 @@ mod tests {
             files["tests/unit/a.test.js"],
             &[(1, 2)],
             &HashSet::new(),
+            USES_CAP_CHARS,
             &mut |_| Some("function forEach() {}\n".to_string()),
         );
         assert!(found.is_empty());
@@ -803,6 +836,7 @@ mod tests {
             files["src/a.js"],
             &[(3, 5)],
             &HashSet::new(),
+            USES_CAP_CHARS,
             &mut |candidate| files.get(candidate).map(|s| s.to_string()),
         );
         assert!(found.is_empty());
@@ -826,6 +860,7 @@ mod tests {
             files["pkg/api.py"],
             &[(4, 5)],
             &HashSet::new(),
+            USES_CAP_CHARS,
             &mut |candidate| files.get(candidate).map(|s| s.to_string()),
         );
         let names: Vec<&str> = found

@@ -1259,8 +1259,8 @@ fn run(cli: Cli) -> Result<()> {
                     Some((file.to_string(), line.parse().ok()?))
                 })
                 .collect();
-            let mut lookup = |shown: &[(usize, usize)]| {
-                deps::uses(&path, &text, shown, &skip, &mut |candidate| {
+            let mut lookup = |shown: &[(usize, usize)], cap: usize| {
+                deps::uses(&path, &text, shown, &skip, cap, &mut |candidate| {
                     store
                         .read_path(&repo, candidate)
                         .ok()
