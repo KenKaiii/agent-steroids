@@ -148,17 +148,19 @@ ok "search --per-repo"         0 "match"         -- "$BIN" search "int" --per-re
 ok "search --max-tokens"       0 "match"         -- "$BIN" search "int" --max-tokens 500 --limit 20
 ok "show --from/--to"          0 "lines"         -- "$BIN" show antirez/smallchat smallchat-server.c --from 10 --to 20
 ok "show past end of file"     0 "nothing at"    -- "$BIN" show antirez/smallchat smallchat-server.c --from 999999
-ok "show --max-tokens"         0 "continue with --from" -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 50
+ok "show --max-tokens"         0 "continue from line" -- "$BIN" show antirez/smallchat smallchat-server.c --full --max-tokens 50
 ok "show --max-tokens --json"  0 '"total_lines"' -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 50 --json
 ok "show max-tokens too low"   1 "at least 50"   -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 10
 # Reading only what is needed: one definition, an outline, code without comments.
 ok "show --symbols"            0 "createClient"  -- "$BIN" show antirez/smallchat smallchat-server.c --symbols createClient
-ok "show --symbols unknown"    1 "--outline"     -- "$BIN" show antirez/smallchat smallchat-server.c --symbols noSuchThing
+ok "show --symbols unknown"    1 "its outline lists" -- "$BIN" show antirez/smallchat smallchat-server.c --symbols noSuchThing
 ok "show --symbols with --from refused" 2 "cannot be used" -- "$BIN" show antirez/smallchat smallchat-server.c --symbols main --from 3
-ok "show --outline"            0 "outline:"      -- "$BIN" show antirez/smallchat smallchat-server.c --outline
+ok "show --outline"            0 "outline of 278 lines" -- "$BIN" show antirez/smallchat smallchat-server.c --outline
+ok "show --outline of a range" 0 "outline of lines 1-60" -- "$BIN" show antirez/smallchat smallchat-server.c --outline --from 1 --to 60
 ok "show --outline --json"     0 '"blocks"'      -- "$BIN" show antirez/smallchat smallchat-server.c --outline --json
 ok "show --no-comments"        0 "comment lines hidden" -- "$BIN" show antirez/smallchat smallchat-server.c --no-comments
-ok "show explicit --to wins"   0 "lines 1-278"   -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278
+ok "show explicit --to wins"   0 "lines 1-278 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278 --full
+ok "show long range outlines"  0 "so this is their outline" -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278
 ok "define --repo prints body" 0 "int fd"        -- "$BIN" define client --repo antirez/smallchat
 ok "define --repo unknown"     1 "not in corpus" -- "$BIN" define client --repo ghost/repo
 ok "define --path"             0 "struct client" -- "$BIN" define client --path smallchat-server.c
@@ -169,7 +171,10 @@ ok "repos <filter> no match"   1 "no indexed repository" -- "$BIN" repos zzz-non
 # Lighter defaults: grouped file list, auto-outline of long files, folder outlines.
 ok "files groups by directory" 0 "./: chatlib.c chatlib.h" -- "$BIN" files antirez/smallchat
 ok "files --long"              0 "smallchat-client.c	c	" -- "$BIN" files antirez/smallchat --long
-ok "show short file whole"     0 "lines 1-278 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c
+ok "show short file whole"     0 "lines 1-"      -- "$BIN" show antirez/smallchat chatlib.h
+ok "show long file outlines"   0 "would be"      -- "$BIN" show antirez/smallchat smallchat-server.c
+ok "changes --pattern bad regex" 1 "not a valid regex" -- "$BIN" changes antirez/smallchat --pattern '('
+ok "changes --full with --pattern refused" 2 "cannot be used" -- "$BIN" changes antirez/smallchat --full --pattern x
 ok "show --full reads all"     0 "lines 1-"      -- "$BIN" show antirez/smallchat smallchat-server.c --full
 ok "show --full with --symbols refused" 2 "cannot be used" -- "$BIN" show antirez/smallchat smallchat-server.c --full --symbols main
 ok "show a folder"             0 "## smallchat-server.c" -- "$BIN" show antirez/smallchat .

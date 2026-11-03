@@ -229,11 +229,85 @@ fn without_link_targets(line: &str) -> String {
     out
 }
 
+/// Longest line the contents keep: enough for a label and its gist.
+const SUMMARY_LINE_CHARS: usize = 90;
+
+/// One line of a release entry as its summary shows it: headings whole, a
+/// top-level item or paragraph cut to its first sentence, everything else
+/// (nested items, tables, code, blank lines) left to the full entry.
+fn summary_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('|') || line.starts_with([' ', '\t']) {
+        return None;
+    }
+    if trimmed.starts_with('#') {
+        return Some(trimmed.to_string());
+    }
+    // A sentence ends at a full stop followed by a space, past any short
+    // label such as `**Header Defaults:**`.
+    let end = trimmed
+        .match_indices(". ")
+        .map(|(at, _)| at + 1)
+        .find(|at| *at >= 20)
+        .unwrap_or(trimmed.len());
+    let sentence = &trimmed[..end];
+    if sentence.chars().count() <= SUMMARY_LINE_CHARS {
+        return Some(sentence.to_string());
+    }
+    let cut: String = sentence.chars().take(SUMMARY_LINE_CHARS).collect();
+    Some(format!("{}…", cut.trim_end()))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// Headings and each item's opening words.
+    Contents,
+    /// Only the items a pattern matches, whole, under their headings.
+    Matching,
+    Full,
+}
+
+enum Unit<'a> {
+    Heading(&'a str),
+    /// A top-level line and everything nested under it.
+    Item(Vec<&'a str>),
+}
+
+/// An entry's lines as headings and items. Blank lines go; code blocks,
+/// tables and nested lines stay with the item they follow.
+fn units<'a>(lines: &[&'a str]) -> Vec<Unit<'a>> {
+    let mut units: Vec<Unit<'a>> = Vec::new();
+    let mut fenced = false;
+    for line in lines {
+        let trimmed = line.trim();
+        let fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        let nested = fenced || fence || line.starts_with([' ', '\t']) || trimmed.starts_with('|');
+        if fence {
+            fenced = !fenced;
+        }
+        if trimmed.is_empty() && !fenced {
+            continue;
+        }
+        if trimmed.starts_with('#') && !nested {
+            units.push(Unit::Heading(trimmed));
+        } else if let (true, Some(Unit::Item(item))) = (nested, units.last_mut()) {
+            item.push(line);
+        } else {
+            units.push(Unit::Item(vec![line]));
+        }
+    }
+    units
+}
+
 pub struct Request<'a> {
     pub repo: &'a str,
     pub path: &'a str,
     pub version: Option<&'a str>,
     pub list: bool,
+    /// The whole entry rather than its contents.
+    pub full: bool,
+    /// Only the items this matches, whole.
+    pub matching: Option<regex::Regex>,
     pub max_tokens: usize,
     pub json: bool,
 }
@@ -306,15 +380,50 @@ pub fn render(text: &str, request: &Request) -> Result<String> {
             latest.heading.clone(),
             latest.start,
             latest.end,
-            "latest; --version X for another, --list for all".to_string(),
+            "the latest; ask for another by version, or for the list of releases".to_string(),
         )
     };
+
+    // The entry's own heading is already in the header line.
+    let body_start = if heading.is_empty() { start } else { start + 1 };
+    let units = units(&lines[body_start..end]);
+    let mode = match (&request.matching, request.full) {
+        (Some(_), _) => Mode::Matching,
+        (None, true) => Mode::Full,
+        (None, false) => Mode::Contents,
+    };
+    let mut picked: Vec<String> = Vec::new();
+    let mut pending_heading: Option<&str> = None;
+    let mut matched = 0usize;
+    for unit in &units {
+        match unit {
+            Unit::Heading(text) => {
+                if mode == Mode::Matching {
+                    pending_heading = Some(text);
+                } else {
+                    picked.push((*text).to_string());
+                }
+            }
+            Unit::Item(item) => match mode {
+                Mode::Full => picked.extend(item.iter().map(|line| (*line).to_string())),
+                Mode::Contents => picked.extend(summary_line(item[0])),
+                Mode::Matching => {
+                    let pattern = request.matching.as_ref().expect("matching mode");
+                    if item.iter().any(|line| pattern.is_match(line)) {
+                        matched += 1;
+                        picked.extend(pending_heading.take().map(str::to_string));
+                        picked.extend(item.iter().map(|line| (*line).to_string()));
+                    }
+                }
+            },
+        }
+    }
 
     let mut used = 0usize;
     let mut shown: Vec<String> = Vec::new();
     let mut cut = false;
-    for line in &lines[start..end] {
-        let line = without_link_targets(line);
+    for line in picked {
+        let line = without_link_targets(&line);
         used += crate::render::estimate_tokens(&line) + 1;
         if used > request.max_tokens && !shown.is_empty() {
             cut = true;
@@ -330,6 +439,11 @@ pub fn render(text: &str, request: &Request) -> Result<String> {
             "repo": request.repo,
             "path": request.path,
             "release": heading,
+            "mode": match mode {
+                Mode::Contents => "contents",
+                Mode::Matching => "matching",
+                Mode::Full => "full",
+            },
             "lines": shown,
             "truncated": cut,
         })
@@ -343,13 +457,18 @@ pub fn render(text: &str, request: &Request) -> Result<String> {
         out.push_str(&format!(" ({note})"));
     }
     out.push('\n');
+    out.push_str(match mode {
+        Mode::Contents => "# contents: each item's opening words; ask for the items that mention a word (pattern), or the full entry (full)\n".to_string(),
+        Mode::Matching => format!("# {matched} item(s) matching the pattern, whole\n"),
+        Mode::Full => String::new(),
+    }.as_str());
     for line in &shown {
         out.push_str(line);
         out.push('\n');
     }
     if cut {
         out.push_str(&format!(
-            "… stopped at --max-tokens {}\n",
+            "… stopped at the {}-token budget\n",
             request.max_tokens
         ));
     }
@@ -385,6 +504,8 @@ This release adds response timing.
             path: "CHANGELOG.md",
             version,
             list,
+            full: true,
+            matching: None,
             max_tokens: 3000,
             json: false,
         }
@@ -464,5 +585,79 @@ This release adds response timing.
             "call f(x) and g[0](y z)"
         );
         assert_eq!(without_link_targets("broken [a](b"), "broken [a](b");
+    }
+
+    #[test]
+    fn summary_keeps_headings_and_first_sentences() {
+        assert_eq!(
+            summary_line("## 🐛 Bug Fixes").as_deref(),
+            Some("## 🐛 Bug Fixes")
+        );
+        assert_eq!(
+            summary_line(
+                "* **Header Defaults:** Only plain objects are defaults. Applications must convert."
+            )
+            .as_deref(),
+            Some("* **Header Defaults:** Only plain objects are defaults.")
+        );
+        assert_eq!(summary_line("  * nested detail"), None);
+        assert_eq!(summary_line("| a | b |"), None);
+        assert_eq!(summary_line(""), None);
+        let long = format!("* {}", "word ".repeat(60));
+        let short = summary_line(&long).unwrap();
+        assert!(short.ends_with('…') && short.chars().count() <= SUMMARY_LINE_CHARS + 1);
+    }
+
+    #[test]
+    fn contents_by_default_whole_items_on_a_pattern() {
+        let entry = "# Changelog\n\n## v2.0.0\n\nIntro paragraph that runs on for a while. More.\n\n## Fixes\n\n* **Forms:** Sparse fields serialize as keyed objects. Details follow here.\n  * nested note about forms\n* **Proxy:** TLS options apply. More text.\n\n## Chores\n\n* Bumped deps.\n\n## v1.0.0\n\n* Old.\n";
+        let base = |full, matching: Option<&str>| Request {
+            repo: "o/r",
+            path: "CHANGELOG.md",
+            version: None,
+            list: false,
+            full,
+            matching: matching.map(|p| {
+                regex::RegexBuilder::new(p)
+                    .case_insensitive(true)
+                    .build()
+                    .unwrap()
+            }),
+            max_tokens: 3000,
+            json: false,
+        };
+        let contents = render(entry, &base(false, None)).unwrap();
+        assert!(
+            contents.contains("* **Forms:** Sparse fields serialize as keyed objects.\n"),
+            "{contents}"
+        );
+        assert!(
+            !contents.contains("Details follow") && !contents.contains("nested note"),
+            "{contents}"
+        );
+        assert!(!contents.contains("Old."), "{contents}");
+        assert_eq!(
+            contents.matches("v2.0.0").count(),
+            1,
+            "heading repeated: {contents}"
+        );
+
+        let forms = render(entry, &base(false, Some("FORM"))).unwrap();
+        assert!(forms.contains("1 item(s) matching"), "{forms}");
+        assert!(
+            forms.contains("## Fixes\n* **Forms:**")
+                && forms.contains("  * nested note about forms"),
+            "{forms}"
+        );
+        assert!(
+            !forms.contains("Proxy") && !forms.contains("## Chores"),
+            "{forms}"
+        );
+
+        let full = render(entry, &base(true, None)).unwrap();
+        assert!(
+            full.contains("Details follow here.") && full.contains("Bumped deps."),
+            "{full}"
+        );
     }
 }

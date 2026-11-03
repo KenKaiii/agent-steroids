@@ -15,12 +15,6 @@ use crate::search::{
 /// Longest body printed for one definition before pointing at the rest.
 pub const MAX_BODY_LINES: usize = 150;
 
-/// A plain `show` of a file longer than this prints its outline instead.
-/// Below it, reading the whole file is cheaper than the extra call an
-/// outline would lead to; above it, a full read is mostly code the task
-/// never needed, paid for again on every later turn.
-pub const OUTLINE_ABOVE_LINES: usize = 300;
-
 /// One definition found in a file: its 1-based first and last line.
 #[derive(Debug, PartialEq)]
 pub struct Body {
@@ -188,16 +182,10 @@ fn indent_block_end(lines: &[&str], index: usize, python: bool) -> usize {
     last + 1
 }
 
-/// The lines worth seeing to know what a file holds: declarations, test
-/// cases and, in tests, the assertions that pin behaviour down.
+/// The lines worth seeing to know what a file holds: its declarations, or
+/// in a test file its cases and top-level helpers. Assertions are left to a
+/// read of the case: listing them made a test outline a third of the file.
 pub fn outline(lines: &[&str], language: &str, test_file: bool) -> Vec<usize> {
-    outline_with(lines, language, test_file, test_file)
-}
-
-/// `outline`, choosing separately whether a test file's assertions are
-/// listed. In a test file only the cases and top-level declarations count:
-/// helpers and classes defined inside a test body are part of that test.
-fn outline_with(lines: &[&str], language: &str, test_file: bool, assertions: bool) -> Vec<usize> {
     let prose = prose_lines(lines, language);
     lines
         .iter()
@@ -209,9 +197,8 @@ fn outline_with(lines: &[&str], language: &str, test_file: bool, assertions: boo
             if !test_file {
                 return is_outline_line(line, false);
             }
-            let trimmed = line.trim_start();
-            is_test_case(trimmed)
-                || (assertions && is_assertion(trimmed))
+            // Helpers and classes defined inside a test body belong to it.
+            is_test_case(line.trim_start())
                 || (indent_of(line) == 0 && is_outline_line(line, false))
         })
         .map(|(index, _)| index + 1)
@@ -236,19 +223,6 @@ const TEST_CALLS: &[&str] = &[
 
 fn is_test_case(trimmed: &str) -> bool {
     TEST_CALLS.iter().any(|word| trimmed.starts_with(word))
-}
-
-fn is_assertion(trimmed: &str) -> bool {
-    [
-        "expect(",
-        "assert",
-        "await expect(",
-        "should.",
-        "t.Error",
-        "t.Fatal",
-    ]
-    .iter()
-    .any(|word| trimmed.starts_with(word))
 }
 
 fn is_outline_line(line: &str, test_file: bool) -> bool {
@@ -410,29 +384,106 @@ pub fn is_test_path(path: &str) -> bool {
     lowered.contains("test") || lowered.contains("spec")
 }
 
+/// Most characters a read returns unless all of it was asked for. Every
+/// character an agent reads is paid for again on each later turn; past this,
+/// the outline plus a targeted read costs less than the read.
+pub const READ_CAP_CHARS: usize = 6_000;
+
+/// How `show` words its next steps. Plain names, not flag syntax: an agent
+/// calling a built-in tool knows these as parameters, a shell user as flags.
+const HOW_TO_READ: &str =
+    "ask for definitions by name (symbols), a smaller line range (from/to), or all of it (full)";
+
 /// What `show` was asked for, after the range defaults are resolved.
 pub struct ShowRequest<'a> {
     pub repo: &'a str,
     pub path: &'a str,
     /// First and last line of a plain range read.
     pub range: (usize, usize),
+    /// The range was given, rather than the default of the whole file.
+    pub ranged: bool,
     pub symbols: &'a [String],
     pub outline: bool,
-    /// The outline was chosen for the caller because the file is long.
-    pub auto_outline: bool,
+    /// All of the range, however long.
+    pub full: bool,
     pub no_comments: bool,
     pub max_tokens: Option<usize>,
     pub json: bool,
 }
 
+/// `lines[start..=end]` without comment lines or blank ones, as runs.
+fn without_comments(
+    lines: &[&str],
+    blocks: Vec<(usize, usize)>,
+    hidden: &HashSet<usize>,
+) -> (Vec<(usize, usize)>, usize) {
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    for (start, end) in blocks {
+        let mut run: Option<(usize, usize)> = None;
+        for number in start..=end {
+            if hidden.contains(&number) || lines[number - 1].trim().is_empty() {
+                dropped += usize::from(hidden.contains(&number));
+                kept.extend(run.take());
+                continue;
+            }
+            run = Some(run.map_or((number, number), |(first, _)| (first, number)));
+        }
+        kept.extend(run);
+    }
+    (kept, dropped)
+}
+
+/// Characters `blocks` print as.
+fn printed_chars(lines: &[&str], blocks: &[(usize, usize)]) -> usize {
+    blocks
+        .iter()
+        .flat_map(|&(start, end)| start..=end)
+        .map(|number| numbered(number, lines[number - 1]).len() + 1)
+        .sum()
+}
+
+/// The leading part of `blocks` that prints within `cap` characters (at
+/// least one line), and the first line left out.
+fn within_chars(
+    lines: &[&str],
+    blocks: &[(usize, usize)],
+    cap: usize,
+) -> (Vec<(usize, usize)>, Option<usize>) {
+    let mut used = 0usize;
+    let mut kept = Vec::new();
+    for &(start, end) in blocks {
+        for number in start..=end {
+            used += numbered(number, lines[number - 1]).len() + 1;
+            if used > cap && !(kept.is_empty() && number == start) {
+                if number > start {
+                    kept.push((start, number - 1));
+                }
+                return (kept, Some(number));
+            }
+        }
+        kept.push((start, end));
+    }
+    (kept, None)
+}
+
 /// `show`'s answer for one file, text or JSON.
 pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<String> {
     let language = crate::filters::language_of(request.path).unwrap_or("");
+    let test_file = is_test_path(request.path);
     let total = lines.len();
     let mut notes: Vec<String> = Vec::new();
     // Contiguous runs of lines to print, 1-based and inclusive.
     let mut blocks: Vec<(usize, usize)> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
+    let mut outlined = false;
+    let (start, end) = request.range;
+    let hidden = if request.no_comments {
+        comment_lines(lines, language)
+    } else {
+        HashSet::new()
+    };
+
     if !request.symbols.is_empty() {
         let mut found = Vec::new();
         for symbol in request.symbols {
@@ -441,23 +492,21 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
                 missing.push(symbol.trim());
             }
             for body in bodies {
-                let end = body.end.min(body.start + MAX_BODY_LINES - 1);
-                if end < body.end {
+                let last = body.end.min(body.start + MAX_BODY_LINES - 1);
+                if last < body.end {
                     notes.push(format!(
-                        "{symbol} cut at {MAX_BODY_LINES} lines; it ends at {}",
+                        "{symbol} cut at {MAX_BODY_LINES} lines; it runs to line {}",
                         body.end
                     ));
                 }
                 found.push(format!("{symbol} {}-{}", body.start, body.end));
-                blocks.push((body.start, end));
+                blocks.push((body.start, last));
             }
         }
         if blocks.is_empty() {
             anyhow::bail!(
-                "no definition of {} in {}/{}; `steroids show {} {} --outline` lists what it defines",
+                "no definition of {} in {}/{}; its outline lists what it defines",
                 missing.join(", "),
-                request.repo,
-                request.path,
                 request.repo,
                 request.path
             );
@@ -468,61 +517,84 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         if !missing.is_empty() {
             notes.push(format!("not defined here: {}", missing.join(", ")));
         }
-    } else if request.outline {
-        // Chosen for the caller, a test file's outline is its cases; asked
-        // for, it adds the assertions that say what each case expects.
-        let test_file = is_test_path(request.path);
-        let picked = outline_with(
-            lines,
-            language,
-            test_file,
-            test_file && !request.auto_outline,
-        );
-        notes.push(if request.auto_outline {
-            format!(
-                "{total} lines, so this is its outline ({} lines). Read what you need: \
-                 --symbols NAME[,NAME] for bodies, --from N --to M for a range, --full for all",
-                picked.len()
-            )
-        } else {
-            format!(
-                "outline: {} of {total} lines; read one with --symbols NAME or --from/--to",
-                picked.len()
-            )
-        });
-        blocks = picked.into_iter().map(|line| (line, line)).collect();
-    } else {
-        let (start, end) = request.range;
+        if request.no_comments {
+            let (kept, dropped) = without_comments(lines, blocks, &hidden);
+            blocks = kept;
+            notes.push(format!("{dropped} comment lines hidden, and blank ones"));
+        }
+    } else if start > total {
         // Not an error: a caller paging forward has simply reached the end.
-        if start > total {
-            notes.push(format!("file has {total} lines; nothing at line {start}"));
+        notes.push(format!("file has {total} lines; nothing at line {start}"));
+    } else {
+        let mut range = vec![(start, end)];
+        let mut dropped = 0;
+        if request.no_comments {
+            (range, dropped) = without_comments(lines, range, &hidden);
+        }
+        let size = printed_chars(lines, &range);
+        let too_long = !request.full && size > READ_CAP_CHARS;
+        let picked: Vec<usize> = if request.outline || too_long {
+            let scope = if request.outline && !request.ranged {
+                (1, total)
+            } else {
+                (start, end)
+            };
+            outline(lines, language, test_file)
+                .into_iter()
+                .filter(|line| (scope.0..=scope.1).contains(line))
+                .collect()
         } else {
-            blocks.push((start, end));
-            notes.push(format!("lines {start}-{end} of {total}"));
-            if end < total {
-                notes.push("use --from/--to for the rest".into());
+            Vec::new()
+        };
+        if request.outline || (too_long && !picked.is_empty()) {
+            outlined = true;
+            let scope = if request.ranged {
+                format!("lines {start}-{end} of {total}")
+            } else {
+                format!("{total} lines")
+            };
+            notes.push(if request.outline {
+                format!("outline of {scope}; {HOW_TO_READ}")
+            } else {
+                format!(
+                    "{scope} would be {size} characters, so this is their outline; {HOW_TO_READ}"
+                )
+            });
+            if test_file {
+                notes.push("test cases only; read a case by its line range".into());
+            }
+            blocks = picked.into_iter().map(|line| (line, line)).collect();
+            // An outline is a map, and a map past the cap is not one.
+            let (kept, next) = within_chars(lines, &blocks, READ_CAP_CHARS);
+            if let Some(next) = next {
+                blocks = kept;
+                notes.push(format!(
+                    "outline stops at line {}; ask for the outline from line {next}",
+                    next - 1
+                ));
+            }
+        } else {
+            // Too long and nothing declared inside: the range is one long
+            // body, so give its start and say where to continue.
+            let cut = if too_long {
+                within_chars(lines, &range, READ_CAP_CHARS)
+            } else {
+                (range, None)
+            };
+            blocks = cut.0;
+            let shown_end = blocks.last().map_or(end, |block| block.1);
+            notes.push(format!("lines {start}-{shown_end} of {total}"));
+            if let Some(next) = cut.1 {
+                notes.push(format!(
+                    "stopped at {READ_CAP_CHARS} characters; continue from line {next}, or ask for all of it (full)"
+                ));
+            } else if end < total {
+                notes.push("ask for a line range (from/to) for the rest".into());
+            }
+            if request.no_comments {
+                notes.push(format!("{dropped} comment lines hidden, and blank ones"));
             }
         }
-    }
-
-    if request.no_comments {
-        let hidden = comment_lines(lines, language);
-        let mut kept = Vec::new();
-        let mut dropped = 0usize;
-        for (start, end) in blocks {
-            let mut run: Option<(usize, usize)> = None;
-            for number in start..=end {
-                if hidden.contains(&number) || lines[number - 1].trim().is_empty() {
-                    dropped += usize::from(hidden.contains(&number));
-                    kept.extend(run.take());
-                    continue;
-                }
-                run = Some(run.map_or((number, number), |(first, _)| (first, number)));
-            }
-            kept.extend(run);
-        }
-        blocks = kept;
-        notes.push(format!("{dropped} comment lines hidden, and blank ones"));
     }
 
     // Whole lines only, and at least one, so a small budget still answers.
@@ -530,23 +602,23 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         let mut used = 0usize;
         let mut cut: Option<usize> = None;
         let mut kept = Vec::new();
-        'blocks: for &(start, end) in &blocks {
-            for number in start..=end {
+        'blocks: for &(first, last) in &blocks {
+            for number in first..=last {
                 used += crate::render::estimate_tokens(&numbered(number, lines[number - 1]));
-                if used > budget && !(kept.is_empty() && number == start) {
-                    if number > start {
-                        kept.push((start, number - 1));
+                if used > budget && !(kept.is_empty() && number == first) {
+                    if number > first {
+                        kept.push((first, number - 1));
                     }
                     cut = Some(number);
                     break 'blocks;
                 }
             }
-            kept.push((start, end));
+            kept.push((first, last));
         }
         if let Some(next) = cut {
             blocks = kept;
             notes.push(format!(
-                "stopped at --max-tokens {budget}; continue with --from {next}"
+                "stopped at the {budget}-token budget; continue from line {next}"
             ));
         }
     }
@@ -554,14 +626,15 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
     if request.json {
         let items: Vec<serde_json::Value> = blocks
             .iter()
-            .map(|&(start, end)| {
-                serde_json::json!({ "from": start, "to": end, "lines": &lines[start - 1..end] })
+            .map(|&(first, last)| {
+                serde_json::json!({ "from": first, "to": last, "lines": &lines[first - 1..last] })
             })
             .collect();
         return Ok(serde_json::json!({
             "repo": request.repo,
             "path": request.path,
             "total_lines": total,
+            "outline": outlined,
             "blocks": items,
             "missing": missing,
             "notes": notes,
@@ -576,47 +649,49 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         notes.join("; ")
     );
     let mut previous_end = None;
-    for (start, end) in blocks {
+    for (first, last) in blocks {
         // A blank line marks where one definition ends and the next begins;
         // gaps inside a range are already visible in the numbering.
         if !request.symbols.is_empty() || previous_end.is_none() {
             out.push('\n');
         }
-        for number in start..=end {
+        for number in first..=last {
             out.push_str(&numbered(number, lines[number - 1]));
             out.push('\n');
         }
-        previous_end = Some(end);
+        previous_end = Some(last);
     }
     Ok(out)
 }
 
-/// The outline of every file under a directory, in path order, within a
-/// token budget. Test files list their cases but not their assertions here;
-/// `--outline` on one test file adds those.
+/// The outline of every file under a directory, in path order, within the
+/// read cap (or a smaller token budget). Files that do not fit are named, so
+/// the reader knows what to ask for next.
 pub fn render_folder(
     repo: &str,
     directory: &str,
     files: &[(String, String)],
-    max_tokens: usize,
+    max_tokens: Option<usize>,
     json: bool,
 ) -> String {
+    let cap = max_tokens.map_or(READ_CAP_CHARS, |tokens| READ_CAP_CHARS.min(tokens * 4));
     let mut used = 0usize;
     let mut shown: Vec<(&str, Vec<(usize, &str)>)> = Vec::new();
     let mut omitted: Vec<&str> = Vec::new();
     for (path, text) in files {
         let lines: Vec<&str> = text.lines().collect();
         let language = crate::filters::language_of(path).unwrap_or("");
-        let picked: Vec<(usize, &str)> = outline(&lines, language, false)
+        let picked: Vec<(usize, &str)> = outline(&lines, language, is_test_path(path))
             .into_iter()
             .map(|number| (number, lines[number - 1]))
             .collect();
-        let cost = crate::render::estimate_tokens(path)
+        let cost = path.len()
+            + 5
             + picked
                 .iter()
-                .map(|(number, line)| crate::render::estimate_tokens(&numbered(*number, line)))
+                .map(|(number, line)| numbered(*number, line).len() + 1)
                 .sum::<usize>();
-        if used + cost > max_tokens && !shown.is_empty() {
+        if used + cost > cap && !shown.is_empty() {
             omitted.push(path);
             continue;
         }
@@ -645,7 +720,7 @@ pub fn render_folder(
         .to_string();
     }
     let mut out = format!(
-        "# {repo}/{directory}: outline of {} files; --symbols NAME on one file for a body\n",
+        "# {repo}/{directory}: outline of {} files; ask for definitions by name (symbols) in one file for bodies\n",
         shown.len()
     );
     for (path, picked) in &shown {
@@ -657,7 +732,7 @@ pub fn render_folder(
     }
     if !omitted.is_empty() {
         out.push_str(&format!(
-            "\n… {} more files past --max-tokens {max_tokens}: {}\n",
+            "\n… {} more files, past {cap} characters; ask for their outlines by path: {}\n",
             omitted.len(),
             omitted.join(" ")
         ));
@@ -837,7 +912,7 @@ export default {
     }
 
     #[test]
-    fn test_outline_keeps_cases_and_assertions() {
+    fn test_outline_lists_cases_not_assertions() {
         let lines = [
             "describe('toFormData', function () {",
             "  it('should throw on depth', function () {",
@@ -846,9 +921,8 @@ export default {
             "  });",
             "});",
         ];
-        assert_eq!(outline(&lines, "javascript", true), vec![1, 2, 4]);
+        assert_eq!(outline(&lines, "javascript", true), vec![1, 2]);
         assert_eq!(outline(&lines, "javascript", false), vec![1, 2]);
-        assert_eq!(outline_with(&lines, "javascript", true, false), vec![1, 2]);
     }
 
     /// A class or accessor defined inside a test is part of that test.
@@ -862,7 +936,7 @@ export default {
             "      constructor() {",
             "    assert.strictEqual(bag.get('x'), '1');",
         ];
-        assert_eq!(outline(&lines, "javascript", true), vec![1, 2, 3, 6]);
+        assert_eq!(outline(&lines, "javascript", true), vec![1, 2, 3]);
     }
 
     #[test]
@@ -880,9 +954,10 @@ export default {
             repo: "axios/axios",
             path: "lib/utils.js",
             range: (1, 31),
+            ranged: false,
             symbols,
             outline: false,
-            auto_outline: false,
+            full: false,
             no_comments: false,
             max_tokens: None,
             json: false,
@@ -947,7 +1022,7 @@ export default {
         )
         .unwrap();
         let next: usize = out
-            .split("continue with --from ")
+            .split("continue from line ")
             .nth(1)
             .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|n| n.parse().ok())
@@ -978,7 +1053,7 @@ export default {
                 "export function three() {}\n".to_string(),
             ),
         ];
-        let out = render_folder("o/r", "lib", &files, 6000, false);
+        let out = render_folder("o/r", "lib", &files, None, false);
         assert!(
             out.contains("## lib/a.js\n1\tconst one = (x) => x;\n3\tfunction two() {"),
             "{out}"
@@ -988,39 +1063,64 @@ export default {
             "{out}"
         );
         assert!(!out.contains("note") && !out.contains("return 1"), "{out}");
-        let tight = render_folder("o/r", "lib", &files, 1, false);
+        let tight = render_folder("o/r", "lib", &files, Some(1), false);
         assert!(
-            tight.contains("1 more files past --max-tokens 1: lib/b.js"),
+            tight.contains(
+                "1 more files, past 4 characters; ask for their outlines by path: lib/b.js"
+            ),
             "{tight}"
         );
-        let json = render_folder("o/r", "lib", &files, 6000, true);
+        let json = render_folder("o/r", "lib", &files, None, true);
         assert!(
             json.contains(r#""outline":[[1,"const one = (x) => x;"]"#),
             "{json}"
         );
     }
 
-    /// An outline chosen for the caller says so, says how to read more, and
-    /// for a test file lists its cases without their assertions.
+    /// A read past the cap becomes the outline of what was asked for, says
+    /// why in plain words, and lists a test file's cases only. `full` gets
+    /// all of it; a range with nothing declared in it is cut and continued.
     #[test]
-    fn auto_outline_explains_itself() {
+    fn long_reads_become_outlines_unless_full() {
         let mut lines = vec!["describe('x', () => {", "  it('works', () => {"];
-        lines.extend(std::iter::repeat_n("    assert.ok(run());", 400));
-        let out = render_show(
+        lines.extend(std::iter::repeat_n(
+            "    assert.strictEqual(serialize({ a: [1, 2, 3] }), 'a[]=1&a[]=2&a[]=3');",
+            200,
+        ));
+        lines.push("  it('also works', () => {");
+        let total = lines.len();
+        let test = ShowRequest {
+            path: "tests/x.test.js",
+            range: (1, total),
+            ..request(&[])
+        };
+        let out = render_show(&lines, &test).unwrap();
+        assert!(out.contains(&format!("{total} lines would be")), "{out}");
+        assert!(out.contains("ask for definitions by name (symbols), a smaller line range (from/to), or all of it (full)"), "{out}");
+        assert!(!out.contains("--"), "flag syntax in a hint: {out}");
+        assert!(
+            out.contains("1\tdescribe(") && out.contains("203\t  it('also works'"),
+            "{out}"
+        );
+        assert!(!out.contains("assert.strictEqual"), "{out}");
+
+        let all = render_show(&lines, &ShowRequest { full: true, ..test }).unwrap();
+        assert!(
+            all.contains("100\t    assert.strictEqual"),
+            "full was not all of it"
+        );
+
+        // Lines 3-200 hold no case: cut at the cap, with where to continue.
+        let body = render_show(
             &lines,
             &ShowRequest {
-                path: "tests/x.test.js",
-                outline: true,
-                auto_outline: true,
-                ..request(&[])
+                range: (3, 200),
+                ranged: true,
+                ..test
             },
         )
         .unwrap();
-        assert!(
-            out.contains("402 lines, so this is its outline (2 lines)"),
-            "{out}"
-        );
-        assert!(out.contains("--full for all"), "{out}");
-        assert!(!out.contains("assert.ok"), "{out}");
+        assert!(body.len() < READ_CAP_CHARS + 300, "{}", body.len());
+        assert!(body.contains("continue from line"), "{body}");
     }
 }

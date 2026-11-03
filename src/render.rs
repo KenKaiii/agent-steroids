@@ -172,6 +172,25 @@ pub fn grouped_paths<'a>(paths: impl Iterator<Item = &'a str>) -> String {
     out
 }
 
+/// Each directory once, with how many indexed files it holds:
+/// `lib/core/ (13)`. The map for a repository too big to list.
+pub fn directory_counts<'a>(paths: impl Iterator<Item = &'a str>) -> String {
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    for path in paths {
+        let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+        *counts.entry(directory).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(directory, count)| {
+            format!(
+                "{}/ ({count})\n",
+                if directory.is_empty() { "." } else { directory }
+            )
+        })
+        .collect()
+}
+
 /// Longest context line shown. Generated or data-heavy source can hold a
 /// single line of hundreds of kilobytes, and one such match would otherwise
 /// fill a reader's whole context with something they cannot use.
@@ -347,7 +366,7 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             }
             if let Some(end) = item.body_end {
                 out.push_str(&format!(
-                    "  … continues to line {end}: steroids show {} {} --from {} --to {end}\n",
+                    "  … continues to line {end}; ask {} {} for lines {}-{end}\n",
                     item.repo,
                     item.path,
                     start + item.context.len()
@@ -559,6 +578,10 @@ mod grouped_tests {
         assert_eq!(
             super::grouped_paths(paths.into_iter()),
             "./: index.js\nlib/: utils.js axios.js\nlib/core/: Axios.js \"my file.js\"\n"
+        );
+        assert_eq!(
+            super::directory_counts(paths.into_iter()),
+            "./ (1)\nlib/ (2)\nlib/core/ (2)\n"
         );
     }
 }

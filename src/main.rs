@@ -123,7 +123,8 @@ enum Command {
         per_repo: Option<usize>,
         /// Stop adding results once the output would exceed this many tokens.
         /// A caller with a context window cares about tokens, not matches.
-        #[arg(long, default_value_t = 6000)]
+        /// The default is the read cap: about 6,000 characters.
+        #[arg(long, default_value_t = 1500)]
         max_tokens: usize,
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -177,14 +178,15 @@ enum Command {
         /// Print only these definitions' bodies, e.g. --symbols forEach,isPlainObject
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["from", "to", "outline"])]
         symbols: Vec<String>,
-        /// Print only what the file declares, with line numbers; in a test
-        /// file, its test cases and assertions too
-        #[arg(long, conflicts_with_all = ["from", "to"])]
+        /// Print only what the file (or the --from/--to range) declares, with
+        /// line numbers; in a test file, its test cases
+        #[arg(long)]
         outline: bool,
         /// Leave out comments, docstrings and blank lines; numbering is kept
         #[arg(long)]
         no_comments: bool,
-        /// Print the whole file, however long, instead of its outline
+        /// Print all of the file or range, however long. Without it a read
+        /// over 6,000 characters prints its outline instead
         #[arg(long, conflicts_with_all = ["symbols", "outline"])]
         full: bool,
         /// Emit JSON instead of text
@@ -217,6 +219,12 @@ enum Command {
         /// List the releases instead of showing one
         #[arg(long, conflicts_with = "version")]
         list: bool,
+        /// The whole entry; without it, the opening words of each item
+        #[arg(long, conflicts_with = "list")]
+        full: bool,
+        /// Only the items this regex matches (case-insensitive), whole
+        #[arg(long, conflicts_with_all = ["list", "full"])]
+        pattern: Option<String>,
         /// Stop adding lines once the output would exceed this many tokens
         #[arg(long, default_value_t = 3000)]
         max_tokens: usize,
@@ -1205,7 +1213,7 @@ fn run(cli: Cli) -> Result<()> {
                 let reading = !symbols.is_empty() || from.is_some() || to.is_some() || full;
                 if files.is_empty() || reading {
                     bail!(
-                        "not in corpus: {repo}/{path}; `steroids files {repo} --path <dir>` lists what is indexed"
+                        "not in corpus: {repo}/{path}; the repo's file list shows what is indexed"
                     );
                 }
                 let mut read = Vec::new();
@@ -1216,14 +1224,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 println!(
                     "{}",
-                    outline::render_folder(
-                        &repo,
-                        directory,
-                        &read,
-                        max_tokens.unwrap_or(6000),
-                        json
-                    )
-                    .trim_end()
+                    outline::render_folder(&repo, directory, &read, max_tokens, json).trim_end()
                 );
                 return Ok(());
             };
@@ -1237,18 +1238,6 @@ fn run(cli: Cli) -> Result<()> {
                 .into_iter()
                 .filter(|symbol| !symbol.trim().is_empty())
                 .collect();
-            // Nothing said what to read, and the file is long: its outline
-            // costs a tenth of it and says where to look. Text only: a
-            // program asking for JSON asked for the file.
-            let auto_outline = !outline
-                && !json
-                && symbols.is_empty()
-                && !full
-                && from.is_none()
-                && to.is_none()
-                && limit.is_none()
-                && max_tokens.is_none()
-                && lines.len() > outline::OUTLINE_ABOVE_LINES;
             print!(
                 "{}",
                 outline::render_show(
@@ -1263,13 +1252,17 @@ fn run(cli: Cli) -> Result<()> {
                                 start,
                                 from,
                                 to,
-                                // --full is a request for all of it.
-                                limit.or(full.then_some(usize::MAX)),
+                                // --full is a request for all of it, and a
+                                // plain read is the whole file: past the
+                                // read cap it becomes the file's outline.
+                                limit.or((full || (from.is_none() && to.is_none()))
+                                    .then_some(usize::MAX)),
                             ),
                         ),
+                        ranged: from.is_some() || to.is_some(),
                         symbols: &symbols,
-                        outline: outline || auto_outline,
-                        auto_outline,
+                        outline,
+                        full,
                         no_comments,
                         max_tokens,
                         json,
@@ -1352,16 +1345,26 @@ fn run(cli: Cli) -> Result<()> {
                     println!("{path}\t{language}\t{size}");
                 }
             } else {
-                print!(
-                    "{}",
-                    render::grouped_paths(paths.iter().map(|(path, _, _)| path.as_str()))
-                );
+                let listing = render::grouped_paths(paths.iter().map(|(path, _, _)| path.as_str()));
+                // Past the read cap, the directories are the map: each
+                // with its count, and the reader asks for the one it needs.
+                if listing.len() > outline::READ_CAP_CHARS && limit.is_none() {
+                    print!(
+                        "{}",
+                        render::directory_counts(paths.iter().map(|(path, _, _)| path.as_str()))
+                    );
+                    eprintln!(
+                        "{total} files in {repo} at {version}: too many to list, so these are its directories; ask for one directory's files (path)"
+                    );
+                    return Ok(());
+                }
+                print!("{listing}");
             }
             eprintln!(
                 "{} of {total} files shown for {repo} at {version}{}",
                 paths.len(),
                 if paths.len() < total {
-                    " (narrow with --path, or raise --limit)"
+                    " (narrow by path, or raise the limit)"
                 } else {
                     ""
                 }
@@ -1656,10 +1659,22 @@ fn run(cli: Cli) -> Result<()> {
             repo,
             version,
             list,
+            full,
+            pattern,
             max_tokens,
             json,
         } => {
             check_token_budget(max_tokens)?;
+            let matching = pattern
+                .as_deref()
+                .map(|pattern| {
+                    regex::RegexBuilder::new(pattern)
+                        .case_insensitive(true)
+                        .size_limit(1 << 20)
+                        .build()
+                })
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("--pattern is not a valid regex: {error}"))?;
             let repo = resolve_repo(&store, &repo)?;
             let Some((path, text)) = store.changelog(&repo)? else {
                 bail!(
@@ -1676,6 +1691,8 @@ fn run(cli: Cli) -> Result<()> {
                         path: &path,
                         version: version.as_deref(),
                         list,
+                        full,
+                        matching,
                         max_tokens,
                         json,
                     },

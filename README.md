@@ -110,23 +110,31 @@ I have a local corpus of real open source code at ~/.steroids. Search it
 before writing anything non-trivial, to see how other projects solved the
 same problem.
 
+If your agent has a built-in `steroids` tool (GG Coder does; load it with
+tool_search if it isn't listed), use it instead of the CLI below: several
+calls in one reply run in parallel. Otherwise run the CLI.
+
   steroids search '<regex>' [--tag T] [--repo a/b,c/d] [--language L] [--path src] [--limit N]
   steroids search -F '$HOME'     literal text instead of a regex
   steroids define <a,b,c> [--repo a/b] [--path P]   where each is defined; with
                                  --repo or --path, each whole body (no file needed)
   steroids show <repo> <dir>     outline of every file in a folder
-  steroids show <repo> <file>    a file; over 300 lines, its outline instead
+  steroids show <repo> <file>    a file, or its outline if over 6,000 characters
   steroids show <repo> <file> --symbols a,b      just those definitions' bodies
-  steroids show <repo> <file> --from N --to M    a range (--no-comments drops comments)
-  steroids changes <repo> [--version X | --list] what a release changed (its changelog)
-  steroids files <repo> [--path dir]   indexed files, one line per directory
+  steroids show <repo> <file> --from N --to M    a range; outlined too if over 6,000
+                                 characters (--no-comments drops comments)
+  steroids changes <repo> [--version X]          a release's contents; --pattern
+                                 'form|param' for the items that matter, whole
+  steroids files <repo> [--path dir]   indexed files by directory (a big repo:
+                                 its directories, then ask with --path)
   steroids repos [name]          indexed repos, with version and commit
   steroids recent --tag X        what changed upstream in the last 72 hours
 
 Read the least that answers the question, in this order: `show <dir>` or a
 file's outline to find where things are, then `define a,b --repo X` or
 `--symbols` for the bodies, `--from/--to` for anything else. Never loop
-`show` over whole files; `--full` exists for the rare file you need entire.
+`show` over whole files, and don't raise --max-tokens to read more: narrow
+the read instead. `--full` is for the rare file you need entire.
 
 Repository names and languages are case-insensitive; any form `add` takes
 (URL, owner/name) works for --repo. A --path without glob characters is a
@@ -134,9 +142,9 @@ prefix: `src` means `src/**`.
 
 Add --json to search, define, show, changes, files, repos or discover for structured
 output; a failure with --json is `{"error": "..."}` on stdout, exit 1.
-Search and define stop at --max-tokens (default 6000), show when you pass it; text says
-"N of M shown", JSON reports the cut as `omitted`, separate from
-`more_available`.
+Search stops at --max-tokens (default 1500), define at 6000; show and changes
+take it only as a lower ceiling. Text says "N of M shown", JSON reports the cut as
+`omitted`, separate from `more_available`.
 
 If a search says the topic is not covered, that is a gap in my corpus, not a
 bad query. Do not retry variations. Instead: run `steroids discover` to find
@@ -144,7 +152,7 @@ well starred, actively maintained repos that solve the problem, tell me what
 you found and why it fits, and add them once I agree.
 ```
 
-That's it. No plugin, no server. Your agent calls it the same way it calls `grep`.
+That's it. No plugin, no server. Without a built-in tool, your agent calls it the same way it calls `grep`.
 
 ## 📦 Or grab 500 repos in one go
 
