@@ -78,6 +78,8 @@ ALTER TABLE repos ADD COLUMN files INTEGER;
 ALTER TABLE repos ADD COLUMN source_bytes INTEGER;
 ALTER TABLE repos ADD COLUMN disk_bytes INTEGER;
 ALTER TABLE repos ADD COLUMN version TEXT;
+ALTER TABLE repos ADD COLUMN changelog_path TEXT;
+ALTER TABLE repos ADD COLUMN changelog BLOB;
 ";
 
 /// What the corpus knows about one indexed repository.
@@ -340,6 +342,16 @@ impl Store {
         // refer to it, and re-adding must not rename it under them.
         let stored = self.find_repo(name)?;
         let name = stored.as_deref().unwrap_or(name);
+        // Plain zstd, not the shared dictionary: it is trained on code, and a
+        // changelog is read whole, one at a time.
+        let changelog = if upstream.changelog.is_empty() {
+            None
+        } else {
+            Some(zstd::bulk::compress(
+                upstream.changelog.as_bytes(),
+                COMPRESSION_LEVEL,
+            )?)
+        };
         self.db.execute(
             "DELETE FROM documents WHERE repo_id = (SELECT id FROM repos WHERE name = ?1)",
             params![name],
@@ -347,10 +359,13 @@ impl Store {
         // RFC 3339 with the Z: SQLite's datetime() is UTC but says nothing,
         // and a reader on another clock takes it for local time.
         self.db.execute(
-            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived, version) \
-             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4, NULLIF(?5, '')) \
+            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived, version, \
+             changelog_path, changelog) \
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4, NULLIF(?5, ''), \
+             NULLIF(?6, ''), ?7) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
              indexed_at = excluded.indexed_at, version = excluded.version, \
+             changelog_path = excluded.changelog_path, changelog = excluded.changelog, \
              files = NULL, source_bytes = NULL, disk_bytes = NULL, \
              pushed_at = COALESCE(NULLIF(excluded.pushed_at, ''), pushed_at), \
              archived = CASE WHEN excluded.pushed_at <> '' \
@@ -360,7 +375,9 @@ impl Store {
                 upstream.commit_sha,
                 upstream.pushed_at,
                 upstream.archived as i64,
-                upstream.version
+                upstream.version,
+                upstream.changelog_path,
+                changelog
             ],
         )?;
         Ok(self.db.query_row(
@@ -1082,6 +1099,23 @@ impl Store {
         Ok(counts.into_iter().collect())
     }
 
+    /// A repository's stored changelog: its file name and newest part.
+    pub fn changelog(&self, repo: &str) -> Result<Option<(String, String)>> {
+        let row: Option<(Option<String>, Option<Vec<u8>>)> = self
+            .db
+            .query_row(
+                "SELECT changelog_path, changelog FROM repos WHERE name = ?1",
+                params![repo],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((Some(path), Some(blob))) = row else {
+            return Ok(None);
+        };
+        let text = zstd::decode_all(blob.as_slice())?;
+        Ok(Some((path, String::from_utf8_lossy(&text).into_owned())))
+    }
+
     /// Forget a repository. Its blob bytes stay until the corpus is rebuilt,
     /// but nothing references them and the index drops them on the next build.
     pub fn remove_repo(&mut self, repo: &str) -> Result<bool> {
@@ -1415,6 +1449,32 @@ mod tests {
             "a repository with no content was still listed"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn changelog_round_trips_and_is_replaced_on_re_add() -> Result<()> {
+        let dir = crate::store::scratch_dir("changelog");
+        let mut store = Store::open_for_write(&dir)?;
+        let with = crate::fetch::Upstream {
+            changelog_path: "CHANGES.rst".into(),
+            changelog: "2.0.0\n-----\n\n- New.\n".into(),
+            ..Default::default()
+        };
+        store.add_repo("a/b", &with)?;
+        assert_eq!(
+            store.changelog("a/b")?,
+            Some(("CHANGES.rst".into(), with.changelog.clone()))
+        );
+        store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        assert_eq!(
+            store.changelog("a/b")?,
+            None,
+            "a removed changelog lingered"
+        );
+        assert_eq!(store.changelog("no/repo")?, None);
+        drop(store);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

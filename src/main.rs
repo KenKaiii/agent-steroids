@@ -5,6 +5,7 @@
 
 mod audit;
 mod bulk;
+mod changelog;
 mod config;
 mod discover;
 mod fetch;
@@ -132,6 +133,7 @@ enum Command {
     },
     /// Find where a function, class or constant is defined
     Define {
+        /// One name, or several separated by commas: forEach,isPlainObject
         symbol: String,
         /// Only these repositories; each definition is then printed whole,
         /// up to 150 lines, instead of a few lines around it
@@ -182,6 +184,9 @@ enum Command {
         /// Leave out comments, docstrings and blank lines; numbering is kept
         #[arg(long)]
         no_comments: bool,
+        /// Print the whole file, however long, instead of its outline
+        #[arg(long, conflicts_with_all = ["symbols", "outline"])]
+        full: bool,
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
@@ -195,6 +200,26 @@ enum Command {
         /// Most files to list; --json lists every file when unset
         #[arg(long)]
         limit: Option<usize>,
+        /// One file per line with language and size, tab separated, instead
+        /// of one line per directory
+        #[arg(long)]
+        long: bool,
+        /// Emit JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// What a release changed, from the repository's own changelog
+    Changes {
+        repo: String,
+        /// Release to show, e.g. 1.21.0; the latest when unset
+        #[arg(long)]
+        version: Option<String>,
+        /// List the releases instead of showing one
+        #[arg(long, conflicts_with = "version")]
+        list: bool,
+        /// Stop adding lines once the output would exceed this many tokens
+        #[arg(long, default_value_t = 3000)]
+        max_tokens: usize,
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
@@ -583,6 +608,7 @@ fn wants_json(command: &Option<Command>) -> bool {
                 | Command::Show { json: true, .. }
                 | Command::Files { json: true, .. }
                 | Command::Recent { json: true, .. }
+                | Command::Changes { json: true, .. }
                 | Command::Repos { json: true, .. }
                 | Command::Discover { json: true, .. }
                 | Command::Audit { json: true }
@@ -1005,19 +1031,24 @@ fn run(cli: Cli) -> Result<()> {
             max_tokens,
             json,
         } => {
-            let symbol = symbol.trim().to_string();
-            if symbol.is_empty() {
+            let names: Vec<String> = symbol
+                .split(',')
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+                .collect();
+            if names.is_empty() {
                 bail!("symbol must not be empty");
             }
             // One character matches a loop variable in every file; nobody
             // defines a type called `x`.
-            if symbol.chars().count() < 2 {
+            if names.iter().any(|name| name.chars().count() < 2) {
                 bail!("symbol must be at least 2 characters");
             }
+            let symbol = names.join(",");
             check_token_budget(max_tokens)?;
             let tag = nonempty_tag(tag)?;
             let language = language.as_deref().map(filters::canonical_language);
-            let escaped = regex::escape(&symbol);
+            let escaped = regex::escape(&names[0]);
             let glob = path.as_deref().map(search::path_filter).transpose()?;
             let (repos, missing) = resolve_repos(&store, &repo)?;
             if !missing.is_empty() {
@@ -1026,40 +1057,59 @@ fn run(cli: Cli) -> Result<()> {
                     missing.join(", ")
                 );
             }
+            // Scoped to known repositories, the reader is about to use the
+            // code, not compare projects: the whole body answers that in one
+            // call, where five lines of context sent it to read the file.
+            // Across the corpus it is choosing one first, and the signature
+            // line is enough to choose by.
+            let scoped = !repos.is_empty() || glob.is_some();
             let query = Query {
                 repos: &repos,
                 tag: tag.as_deref(),
                 language: language.as_deref(),
                 path_glob: glob.as_deref(),
+                context_lines: if scoped { 5 } else { 0 },
                 ..Query::new(limit)
             };
-            let mut matches =
-                search::search(&mut store, &search::definition_pattern(&symbol), &query)?;
-            matches.matches.retain(|hit| {
-                let line = hit
-                    .context
-                    .get(hit.line_number.saturating_sub(hit.context_first_line))
-                    .map(String::as_str)
-                    .unwrap_or_default();
-                !search::is_binding_not_definition(line, &symbol)
-            });
-            // A variable bound inside a function shares the name but is not
-            // what `define` is for; keep such hits only if nothing better
-            // exists.
-            if matches
-                .matches
-                .iter()
-                .any(|hit| !search::is_local_binding(hit))
-            {
-                matches.matches.retain(|hit| !search::is_local_binding(hit));
+            let mut matches = search::SearchResults {
+                matches: Vec::new(),
+                more_available: false,
+            };
+            let mut not_found = Vec::new();
+            for name in &names {
+                let mut found =
+                    search::search(&mut store, &search::definition_pattern(name), &query)?;
+                found.matches.retain(|hit| {
+                    let line = hit
+                        .context
+                        .get(hit.line_number.saturating_sub(hit.context_first_line))
+                        .map(String::as_str)
+                        .unwrap_or_default();
+                    !search::is_binding_not_definition(line, name)
+                });
+                // A variable bound inside a function shares the name but is
+                // not what `define` is for; keep such hits only if nothing
+                // better exists.
+                if found
+                    .matches
+                    .iter()
+                    .any(|hit| !search::is_local_binding(hit))
+                {
+                    found.matches.retain(|hit| !search::is_local_binding(hit));
+                }
+                if found.matches.is_empty() {
+                    not_found.push(name.as_str());
+                }
+                matches.more_available |= found.more_available;
+                matches.matches.extend(found.matches);
             }
-            // Scoped to known repositories, the reader is about to use the
-            // code, not compare projects: the whole body answers that in one
-            // call, where five lines of context sent it to read the file.
-            if !repos.is_empty() || glob.is_some() {
+            if scoped {
                 for hit in matches.matches.iter_mut() {
                     expand_to_body(&mut store, hit)?;
                 }
+            }
+            if names.len() > 1 && matches.is_empty() {
+                bail!("no definition of {} found", names.join(", "));
             }
             let unindexed = search::unindexed(&store)?;
             if json {
@@ -1111,6 +1161,12 @@ fn run(cli: Cli) -> Result<()> {
                         max_tokens,
                     )
                 );
+                if !not_found.is_empty() && names.len() > 1 {
+                    println!("\nnot found: {}", not_found.join(", "));
+                }
+                if !scoped {
+                    println!("\nwhole body: steroids define {symbol} --repo <repo>");
+                }
             }
         }
 
@@ -1124,6 +1180,7 @@ fn run(cli: Cli) -> Result<()> {
             symbols,
             outline,
             no_comments,
+            full,
             json,
         } => {
             check_positive("--limit", limit)?;
@@ -1132,9 +1189,43 @@ fn run(cli: Cli) -> Result<()> {
             }
             let repo = resolve_repo(&store, &repo)?;
             let Some(content) = store.read_path(&repo, &path)? else {
-                bail!(
-                    "not in corpus: {repo}/{path}; `steroids files {repo} --path <dir>` lists what is indexed"
+                // A directory reads as the outline of every file under it:
+                // what an agent looping `show` over each file was after.
+                let directory = match path.trim_end_matches('/') {
+                    "." => "",
+                    directory => directory,
+                };
+                let under = format!("{directory}/");
+                let files: Vec<String> = store
+                    .list_files(&repo, usize::MAX)?
+                    .into_iter()
+                    .map(|(file, _, _)| file)
+                    .filter(|file| directory.is_empty() || file.starts_with(&under))
+                    .collect();
+                let reading = !symbols.is_empty() || from.is_some() || to.is_some() || full;
+                if files.is_empty() || reading {
+                    bail!(
+                        "not in corpus: {repo}/{path}; `steroids files {repo} --path <dir>` lists what is indexed"
+                    );
+                }
+                let mut read = Vec::new();
+                for file in files {
+                    if let Some(bytes) = store.read_path(&repo, &file)? {
+                        read.push((file, String::from_utf8_lossy(&bytes).into_owned()));
+                    }
+                }
+                println!(
+                    "{}",
+                    outline::render_folder(
+                        &repo,
+                        directory,
+                        &read,
+                        max_tokens.unwrap_or(6000),
+                        json
+                    )
+                    .trim_end()
                 );
+                return Ok(());
             };
             let text = String::from_utf8_lossy(&content);
             let lines: Vec<&str> = text.lines().collect();
@@ -1146,6 +1237,18 @@ fn run(cli: Cli) -> Result<()> {
                 .into_iter()
                 .filter(|symbol| !symbol.trim().is_empty())
                 .collect();
+            // Nothing said what to read, and the file is long: its outline
+            // costs a tenth of it and says where to look. Text only: a
+            // program asking for JSON asked for the file.
+            let auto_outline = !outline
+                && !json
+                && symbols.is_empty()
+                && !full
+                && from.is_none()
+                && to.is_none()
+                && limit.is_none()
+                && max_tokens.is_none()
+                && lines.len() > outline::OUTLINE_ABOVE_LINES;
             print!(
                 "{}",
                 outline::render_show(
@@ -1153,9 +1256,20 @@ fn run(cli: Cli) -> Result<()> {
                     &outline::ShowRequest {
                         repo: &repo,
                         path: &path,
-                        range: (start, show_end(lines.len(), start, from, to, limit)),
+                        range: (
+                            start,
+                            show_end(
+                                lines.len(),
+                                start,
+                                from,
+                                to,
+                                // --full is a request for all of it.
+                                limit.or(full.then_some(usize::MAX)),
+                            ),
+                        ),
                         symbols: &symbols,
-                        outline,
+                        outline: outline || auto_outline,
+                        auto_outline,
                         no_comments,
                         max_tokens,
                         json,
@@ -1171,6 +1285,7 @@ fn run(cli: Cli) -> Result<()> {
             repo,
             path,
             limit,
+            long,
             json,
         } => {
             check_positive("--limit", limit)?;
@@ -1181,8 +1296,10 @@ fn run(cli: Cli) -> Result<()> {
             // already narrows the list, so it lifts the cap.
             let cap = limit.unwrap_or(if json || glob.is_some() {
                 usize::MAX
-            } else {
+            } else if long {
                 200
+            } else {
+                1000
             });
             let mut paths = store.list_files(&repo, usize::MAX)?;
             if paths.is_empty() {
@@ -1226,11 +1343,19 @@ fn run(cli: Cli) -> Result<()> {
                 );
                 return Ok(());
             }
-            // Tab separated: `cut -f1` and `awk` read it without guessing at
-            // column widths, and the summary goes to stderr so it never lands
-            // in the pipe.
-            for (path, language, size) in &paths {
-                println!("{path}\t{language}\t{size}");
+            // --long is tab separated: `cut -f1` and `awk` read it without
+            // guessing at column widths. The default names each directory
+            // once, a third of the tokens. The summary goes to stderr so it
+            // never lands in a pipe.
+            if long {
+                for (path, language, size) in &paths {
+                    println!("{path}\t{language}\t{size}");
+                }
+            } else {
+                print!(
+                    "{}",
+                    render::grouped_paths(paths.iter().map(|(path, _, _)| path.as_str()))
+                );
             }
             eprintln!(
                 "{} of {total} files shown for {repo} at {version}{}",
@@ -1525,6 +1650,38 @@ fn run(cli: Cli) -> Result<()> {
                     println!("  {key} = {}", settings.get(&key));
                 }
             }
+        }
+
+        Command::Changes {
+            repo,
+            version,
+            list,
+            max_tokens,
+            json,
+        } => {
+            check_token_budget(max_tokens)?;
+            let repo = resolve_repo(&store, &repo)?;
+            let Some((path, text)) = store.changelog(&repo)? else {
+                bail!(
+                    "no changelog stored for {repo}: it has none at its root, or it was indexed \
+                     before steroids kept them (`steroids add {repo}` re-fetches it)"
+                );
+            };
+            println!(
+                "{}",
+                changelog::render(
+                    &text,
+                    &changelog::Request {
+                        repo: &repo,
+                        path: &path,
+                        version: version.as_deref(),
+                        list,
+                        max_tokens,
+                        json,
+                    },
+                )?
+                .trim_end()
+            );
         }
 
         Command::Recent {

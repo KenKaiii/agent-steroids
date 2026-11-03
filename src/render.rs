@@ -145,6 +145,33 @@ pub fn estimate_tokens(text: &str) -> usize {
     words.max(chars)
 }
 
+/// Paths as one line per directory: `lib/core/: Axios.js AxiosError.js`.
+/// Each directory is named once instead of on every file, which is most of
+/// a long listing's tokens.
+pub fn grouped_paths<'a>(paths: impl Iterator<Item = &'a str>) -> String {
+    let mut directories: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for path in paths {
+        let (directory, name) = path.rsplit_once('/').unwrap_or(("", path));
+        directories.entry(directory).or_default().push(name);
+    }
+    let mut out = String::new();
+    for (directory, names) in directories {
+        out.push_str(if directory.is_empty() { "." } else { directory });
+        out.push_str("/:");
+        for name in names {
+            out.push(' ');
+            // A name with a space would read as two files.
+            if name.contains(char::is_whitespace) {
+                out.push_str(&format!("{name:?}"));
+            } else {
+                out.push_str(name);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Longest context line shown. Generated or data-heavy source can hold a
 /// single line of hundreds of kilobytes, and one such match would otherwise
 /// fill a reader's whole context with something they cannot use.
@@ -514,6 +541,24 @@ mod line_length_tests {
             json.len() < 4_000,
             "one JSON match produced {} bytes of output",
             json.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod grouped_tests {
+    #[test]
+    fn grouped_paths_name_each_directory_once() {
+        let paths = [
+            "lib/utils.js",
+            "lib/core/Axios.js",
+            "index.js",
+            "lib/core/my file.js",
+            "lib/axios.js",
+        ];
+        assert_eq!(
+            super::grouped_paths(paths.into_iter()),
+            "./: index.js\nlib/: utils.js axios.js\nlib/core/: Axios.js \"my file.js\"\n"
         );
     }
 }

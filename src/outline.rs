@@ -15,6 +15,12 @@ use crate::search::{
 /// Longest body printed for one definition before pointing at the rest.
 pub const MAX_BODY_LINES: usize = 150;
 
+/// A plain `show` of a file longer than this prints its outline instead.
+/// Below it, reading the whole file is cheaper than the extra call an
+/// outline would lead to; above it, a full read is mostly code the task
+/// never needed, paid for again on every later turn.
+pub const OUTLINE_ABOVE_LINES: usize = 300;
+
 /// One definition found in a file: its 1-based first and last line.
 #[derive(Debug, PartialEq)]
 pub struct Body {
@@ -185,15 +191,64 @@ fn indent_block_end(lines: &[&str], index: usize, python: bool) -> usize {
 /// The lines worth seeing to know what a file holds: declarations, test
 /// cases and, in tests, the assertions that pin behaviour down.
 pub fn outline(lines: &[&str], language: &str, test_file: bool) -> Vec<usize> {
+    outline_with(lines, language, test_file, test_file)
+}
+
+/// `outline`, choosing separately whether a test file's assertions are
+/// listed. In a test file only the cases and top-level declarations count:
+/// helpers and classes defined inside a test body are part of that test.
+fn outline_with(lines: &[&str], language: &str, test_file: bool, assertions: bool) -> Vec<usize> {
     let prose = prose_lines(lines, language);
     lines
         .iter()
         .enumerate()
         .filter(|(index, line)| {
-            !prose.contains(&(index + 1)) && !is_prose(line) && is_outline_line(line, test_file)
+            if prose.contains(&(index + 1)) || is_prose(line) {
+                return false;
+            }
+            if !test_file {
+                return is_outline_line(line, false);
+            }
+            let trimmed = line.trim_start();
+            is_test_case(trimmed)
+                || (assertions && is_assertion(trimmed))
+                || (indent_of(line) == 0 && is_outline_line(line, false))
         })
         .map(|(index, _)| index + 1)
         .collect()
+}
+
+const TEST_CALLS: &[&str] = &[
+    "describe(",
+    "it(",
+    "test(",
+    "context(",
+    "describe.",
+    "it.",
+    "test.",
+    "def test",
+    "async def test",
+    "fn test",
+    "func Test",
+    "#[test]",
+    "@Test",
+];
+
+fn is_test_case(trimmed: &str) -> bool {
+    TEST_CALLS.iter().any(|word| trimmed.starts_with(word))
+}
+
+fn is_assertion(trimmed: &str) -> bool {
+    [
+        "expect(",
+        "assert",
+        "await expect(",
+        "should.",
+        "t.Error",
+        "t.Fatal",
+    ]
+    .iter()
+    .any(|word| trimmed.starts_with(word))
 }
 
 fn is_outline_line(line: &str, test_file: bool) -> bool {
@@ -363,6 +418,8 @@ pub struct ShowRequest<'a> {
     pub range: (usize, usize),
     pub symbols: &'a [String],
     pub outline: bool,
+    /// The outline was chosen for the caller because the file is long.
+    pub auto_outline: bool,
     pub no_comments: bool,
     pub max_tokens: Option<usize>,
     pub json: bool,
@@ -412,11 +469,27 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
             notes.push(format!("not defined here: {}", missing.join(", ")));
         }
     } else if request.outline {
-        let picked = outline(lines, language, is_test_path(request.path));
-        notes.push(format!(
-            "outline: {} of {total} lines; read one with --symbols NAME or --from/--to",
-            picked.len()
-        ));
+        // Chosen for the caller, a test file's outline is its cases; asked
+        // for, it adds the assertions that say what each case expects.
+        let test_file = is_test_path(request.path);
+        let picked = outline_with(
+            lines,
+            language,
+            test_file,
+            test_file && !request.auto_outline,
+        );
+        notes.push(if request.auto_outline {
+            format!(
+                "{total} lines, so this is its outline ({} lines). Read what you need: \
+                 --symbols NAME[,NAME] for bodies, --from N --to M for a range, --full for all",
+                picked.len()
+            )
+        } else {
+            format!(
+                "outline: {} of {total} lines; read one with --symbols NAME or --from/--to",
+                picked.len()
+            )
+        });
         blocks = picked.into_iter().map(|line| (line, line)).collect();
     } else {
         let (start, end) = request.range;
@@ -516,6 +589,80 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         previous_end = Some(end);
     }
     Ok(out)
+}
+
+/// The outline of every file under a directory, in path order, within a
+/// token budget. Test files list their cases but not their assertions here;
+/// `--outline` on one test file adds those.
+pub fn render_folder(
+    repo: &str,
+    directory: &str,
+    files: &[(String, String)],
+    max_tokens: usize,
+    json: bool,
+) -> String {
+    let mut used = 0usize;
+    let mut shown: Vec<(&str, Vec<(usize, &str)>)> = Vec::new();
+    let mut omitted: Vec<&str> = Vec::new();
+    for (path, text) in files {
+        let lines: Vec<&str> = text.lines().collect();
+        let language = crate::filters::language_of(path).unwrap_or("");
+        let picked: Vec<(usize, &str)> = outline(&lines, language, false)
+            .into_iter()
+            .map(|number| (number, lines[number - 1]))
+            .collect();
+        let cost = crate::render::estimate_tokens(path)
+            + picked
+                .iter()
+                .map(|(number, line)| crate::render::estimate_tokens(&numbered(*number, line)))
+                .sum::<usize>();
+        if used + cost > max_tokens && !shown.is_empty() {
+            omitted.push(path);
+            continue;
+        }
+        used += cost;
+        shown.push((path, picked));
+    }
+    if json {
+        let items: Vec<serde_json::Value> = shown
+            .iter()
+            .map(|(path, picked)| {
+                serde_json::json!({
+                    "path": path,
+                    "outline": picked
+                        .iter()
+                        .map(|(number, line)| serde_json::json!([number, line]))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        return serde_json::json!({
+            "repo": repo,
+            "path": directory,
+            "files": items,
+            "omitted": omitted,
+        })
+        .to_string();
+    }
+    let mut out = format!(
+        "# {repo}/{directory}: outline of {} files; --symbols NAME on one file for a body\n",
+        shown.len()
+    );
+    for (path, picked) in &shown {
+        out.push_str(&format!("\n## {path}\n"));
+        for (number, line) in picked {
+            out.push_str(&numbered(*number, line));
+            out.push('\n');
+        }
+    }
+    if !omitted.is_empty() {
+        out.push_str(&format!(
+            "\n… {} more files past --max-tokens {max_tokens}: {}\n",
+            omitted.len(),
+            omitted.join(" ")
+        ));
+    }
+    out
 }
 
 /// One line as `show` prints it: a tab after the number aligns like padding
@@ -701,6 +848,21 @@ export default {
         ];
         assert_eq!(outline(&lines, "javascript", true), vec![1, 2, 4]);
         assert_eq!(outline(&lines, "javascript", false), vec![1, 2]);
+        assert_eq!(outline_with(&lines, "javascript", true, false), vec![1, 2]);
+    }
+
+    /// A class or accessor defined inside a test is part of that test.
+    #[test]
+    fn test_outline_skips_helpers_nested_in_cases() {
+        let lines = [
+            "const helper = (x) => x;",
+            "describe('headers', () => {",
+            "  it('reads a bag', () => {",
+            "    class HeaderBag {",
+            "      constructor() {",
+            "    assert.strictEqual(bag.get('x'), '1');",
+        ];
+        assert_eq!(outline(&lines, "javascript", true), vec![1, 2, 3, 6]);
     }
 
     #[test]
@@ -720,6 +882,7 @@ export default {
             range: (1, 31),
             symbols,
             outline: false,
+            auto_outline: false,
             no_comments: false,
             max_tokens: None,
             json: false,
@@ -801,5 +964,63 @@ export default {
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["blocks"][0]["from"], 5);
+    }
+
+    #[test]
+    fn folder_outline_covers_every_file_within_budget() {
+        let files = vec![
+            (
+                "lib/a.js".to_string(),
+                "const one = (x) => x;\n// note\nfunction two() {\n  return 1;\n}\n".to_string(),
+            ),
+            (
+                "lib/b.js".to_string(),
+                "export function three() {}\n".to_string(),
+            ),
+        ];
+        let out = render_folder("o/r", "lib", &files, 6000, false);
+        assert!(
+            out.contains("## lib/a.js\n1\tconst one = (x) => x;\n3\tfunction two() {"),
+            "{out}"
+        );
+        assert!(
+            out.contains("## lib/b.js\n1\texport function three() {}"),
+            "{out}"
+        );
+        assert!(!out.contains("note") && !out.contains("return 1"), "{out}");
+        let tight = render_folder("o/r", "lib", &files, 1, false);
+        assert!(
+            tight.contains("1 more files past --max-tokens 1: lib/b.js"),
+            "{tight}"
+        );
+        let json = render_folder("o/r", "lib", &files, 6000, true);
+        assert!(
+            json.contains(r#""outline":[[1,"const one = (x) => x;"]"#),
+            "{json}"
+        );
+    }
+
+    /// An outline chosen for the caller says so, says how to read more, and
+    /// for a test file lists its cases without their assertions.
+    #[test]
+    fn auto_outline_explains_itself() {
+        let mut lines = vec!["describe('x', () => {", "  it('works', () => {"];
+        lines.extend(std::iter::repeat_n("    assert.ok(run());", 400));
+        let out = render_show(
+            &lines,
+            &ShowRequest {
+                path: "tests/x.test.js",
+                outline: true,
+                auto_outline: true,
+                ..request(&[])
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("402 lines, so this is its outline (2 lines)"),
+            "{out}"
+        );
+        assert!(out.contains("--full for all"), "{out}");
+        assert!(!out.contains("assert.ok"), "{out}");
     }
 }

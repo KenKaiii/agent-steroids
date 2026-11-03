@@ -112,23 +112,27 @@ same problem.
 
   steroids search '<regex>' [--tag T] [--repo a/b,c/d] [--language L] [--path src] [--limit N]
   steroids search -F '$HOME'     literal text instead of a regex
-  steroids define <Symbol> [--repo a/b] [--path P]   where something is defined;
-                                 with --repo or --path, its whole body
-  steroids show <repo> <path> --outline          what a file declares (tests: cases and assertions)
-  steroids show <repo> <path> --symbols a,b      just those definitions' bodies
-  steroids show <repo> <path> [--from N --to N] [--no-comments]   a region, optionally without comments
-  steroids files <repo> [--path dir]   what is indexed for one repo (tab separated)
-  steroids repos [name]          what is indexed, with each repo's version and commit
+  steroids define <a,b,c> [--repo a/b] [--path P]   where each is defined; with
+                                 --repo or --path, each whole body (no file needed)
+  steroids show <repo> <dir>     outline of every file in a folder
+  steroids show <repo> <file>    a file; over 300 lines, its outline instead
+  steroids show <repo> <file> --symbols a,b      just those definitions' bodies
+  steroids show <repo> <file> --from N --to M    a range (--no-comments drops comments)
+  steroids changes <repo> [--version X | --list] what a release changed (its changelog)
+  steroids files <repo> [--path dir]   indexed files, one line per directory
+  steroids repos [name]          indexed repos, with version and commit
   steroids recent --tag X        what changed upstream in the last 72 hours
 
-Read the least that answers the question: `--outline` before a file,
-`--symbols` instead of the whole file, `--no-comments` when only the code matters.
+Read the least that answers the question, in this order: `show <dir>` or a
+file's outline to find where things are, then `define a,b --repo X` or
+`--symbols` for the bodies, `--from/--to` for anything else. Never loop
+`show` over whole files; `--full` exists for the rare file you need entire.
 
 Repository names and languages are case-insensitive; any form `add` takes
 (URL, owner/name) works for --repo. A --path without glob characters is a
 prefix: `src` means `src/**`.
 
-Add --json to search, define, show, files, repos or discover for structured
+Add --json to search, define, show, changes, files, repos or discover for structured
 output; a failure with --json is `{"error": "..."}` on stdout, exit 1.
 Search and define stop at --max-tokens (default 6000), show when you pass it; text says
 "N of M shown", JSON reports the cut as `omitted`, separate from

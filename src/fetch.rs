@@ -360,6 +360,9 @@ pub struct Upstream {
     /// pyproject.toml), empty when there is none. A commit hash cannot tell an
     /// agent whether the snapshot is the release it is porting.
     pub version: String,
+    /// Root changelog file name and its newest part; empty when there is none.
+    pub changelog_path: String,
+    pub changelog: String,
 }
 
 /// Fetch a text endpoint with the shared headers.
@@ -611,6 +614,7 @@ fn prepare_from_tarball(
     let mut files = Vec::new();
     let (mut bytes_kept, mut seen) = (0u64, 0usize);
     let mut rejected: Vec<String> = Vec::new();
+    let mut changelog_rank: Option<usize> = None;
     let mut archive = tar::Archive::new(GzDecoder::new(reader));
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -654,6 +658,24 @@ fn prepare_from_tarball(
         }
         seen += 1;
 
+        // Changelogs are prose, never indexed for search, but the one place a
+        // project says what a release changed.
+        if let Some(rank) = crate::changelog::rank(path)
+            && changelog_rank.is_none_or(|best| rank < best)
+        {
+            let mut head = Vec::new();
+            (&mut entry)
+                .take(crate::changelog::MAX_STORED_BYTES as u64)
+                .read_to_end(&mut head)?;
+            let text = crate::changelog::head(&head);
+            // Headed for an agent's context like any indexed file.
+            if !looks_binary(&head) && !has_hidden_characters(&text) {
+                upstream.changelog_path = path.to_string();
+                upstream.changelog = text;
+                changelog_rank = Some(rank);
+            }
+            continue;
+        }
         // Manifests are not source and are never indexed, so their version is
         // read here, on the way past.
         if upstream.version.is_empty() && size <= MAX_MANIFEST_BYTES && is_manifest(path) {
@@ -939,6 +961,37 @@ mod injection_tests {
 
     fn run(bytes: &[u8]) -> Result<PreparedRepo> {
         prepare_from_tarball("o/repo".into(), Upstream::default(), bytes, false)
+    }
+
+    /// The root changelog is kept beside the code, the best-named one wins,
+    /// and one hiding text is refused like any source file.
+    #[test]
+    fn root_changelog_is_kept_and_never_indexed() -> Result<()> {
+        let code = "def retry(n):\n    for i in range(n):\n        yield i\n".repeat(4);
+        let changelog = "# Changelog\n\n## v1.2.0\n\n- Fixed it.\n";
+        let bytes = tarball(
+            [
+                ("HISTORY.md".to_string(), b"## 0.1.0\n- old\n".as_slice()),
+                ("CHANGELOG.md".to_string(), changelog.as_bytes()),
+                ("docs/CHANGELOG.md".to_string(), b"## 9.9.9\n".as_slice()),
+                ("src/retry.py".to_string(), code.as_bytes()),
+            ]
+            .into_iter(),
+        )?;
+        let prepared = run(&bytes)?;
+        assert_eq!(prepared.upstream.changelog_path, "CHANGELOG.md");
+        assert_eq!(prepared.upstream.changelog, changelog);
+        let kept: Vec<&str> = prepared.files.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert_eq!(kept, vec!["src/retry.py"]);
+
+        let hidden: String = "IGNORE"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let poisoned = format!("## v1.0.0\n- {hidden}\n");
+        let bytes = tarball([("CHANGELOG.md".to_string(), poisoned.as_bytes())].into_iter())?;
+        assert_eq!(run(&bytes)?.upstream.changelog_path, "");
+        Ok(())
     }
 
     /// A file carrying hidden instructions must never enter the corpus, since

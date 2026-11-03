@@ -166,6 +166,18 @@ ok "files --path"              0 "smallchat-server.c" -- "$BIN" files antirez/sm
 ok "files --path no match"     1 "matches --path" -- "$BIN" files antirez/smallchat --path nowhere
 ok "repos <filter>"            0 "smallchat"     -- "$BIN" repos smallc
 ok "repos <filter> no match"   1 "no indexed repository" -- "$BIN" repos zzz-none
+# Lighter defaults: grouped file list, auto-outline of long files, folder outlines.
+ok "files groups by directory" 0 "./: chatlib.c chatlib.h" -- "$BIN" files antirez/smallchat
+ok "files --long"              0 "smallchat-client.c	c	" -- "$BIN" files antirez/smallchat --long
+ok "show short file whole"     0 "lines 1-278 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c
+ok "show --full reads all"     0 "lines 1-"      -- "$BIN" show antirez/smallchat smallchat-server.c --full
+ok "show --full with --symbols refused" 2 "cannot be used" -- "$BIN" show antirez/smallchat smallchat-server.c --full --symbols main
+ok "show a folder"             0 "## smallchat-server.c" -- "$BIN" show antirez/smallchat .
+ok "show folder --from refused" 1 "not in corpus" -- "$BIN" show antirez/smallchat nowhere --from 2
+ok "define several"            0 "struct chatState" -- "$BIN" define client,chatState --repo antirez/smallchat
+ok "define several, none"      1 "no definition of" -- "$BIN" define nopeOne,nopeTwo --repo antirez/smallchat
+ok "changes, no changelog"     1 "no changelog"  -- "$BIN" changes antirez/smallchat
+ok "changes, unknown repo"     1 "not in corpus" -- "$BIN" changes ghost/repo
 ok "recent, repo not indexed"  0 "not in this corpus" -- "$BIN" recent --repo ghost/x --hours 24
 ok "search json has line map"  0 "context_first_line" -- "$BIN" search "int main" --json --limit 1
 ok "search json honours budget" 0 '"omitted":1' -- "$BIN" search "int" --json --max-tokens 50 --limit 2
