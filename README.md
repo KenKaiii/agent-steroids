@@ -112,11 +112,17 @@ same problem.
 
   steroids search '<regex>' [--tag T] [--repo a/b,c/d] [--language L] [--path src] [--limit N]
   steroids search -F '$HOME'     literal text instead of a regex
-  steroids define <Symbol>       where something is defined
-  steroids show <repo> <path> [--from N --to N]   read a file, or one region
-  steroids files <repo>          what is indexed for one repo (tab separated)
-  steroids repos                 what is indexed
+  steroids define <Symbol> [--repo a/b] [--path P]   where something is defined;
+                                 with --repo or --path, its whole body
+  steroids show <repo> <path> --outline          what a file declares (tests: cases and assertions)
+  steroids show <repo> <path> --symbols a,b      just those definitions' bodies
+  steroids show <repo> <path> [--from N --to N] [--no-comments]   a region, optionally without comments
+  steroids files <repo> [--path dir]   what is indexed for one repo (tab separated)
+  steroids repos [name]          what is indexed, with each repo's version and commit
   steroids recent --tag X        what changed upstream in the last 72 hours
+
+Read the least that answers the question: `--outline` before a file,
+`--symbols` instead of the whole file, `--no-comments` when only the code matters.
 
 Repository names and languages are case-insensitive; any form `add` takes
 (URL, owner/name) works for --repo. A --path without glob characters is a
@@ -124,7 +130,7 @@ prefix: `src` means `src/**`.
 
 Add --json to search, define, show, files, repos or discover for structured
 output; a failure with --json is `{"error": "..."}` on stdout, exit 1.
-Output stops at --max-tokens (default 6000) in both text and JSON; text says
+Search and define stop at --max-tokens (default 6000), show when you pass it; text says
 "N of M shown", JSON reports the cut as `omitted`, separate from
 `more_available`.
 

@@ -28,15 +28,26 @@ pub fn render_matches_json(
                     // Where `context` starts, so a caller can number the lines it
                     // was handed instead of guessing the context width.
                     "context_first_line": item.context_start(),
-                    "url": item.permalink(),
                     "scope": item.scope,
                     "context": item.context.iter().map(|line| clamp(line)).collect::<Vec<_>>(),
+                    "body_end": item.body_end,
                 })
             })
             .collect();
-        serde_json::to_string_pretty(&serde_json::json!({
+        // Once per repository, not once per match: a 40-character hash is
+        // twenty-odd tokens, and a permalink on every match was the largest
+        // part of a typical answer.
+        let mut commits = serde_json::Map::new();
+        for item in shown {
+            if let Some(sha) = item.commit() {
+                commits.entry(item.repo.clone()).or_insert(sha.into());
+            }
+        }
+        // Compact: indentation is tokens the reader pays for and never uses.
+        serde_json::to_string(&serde_json::json!({
             "pattern": pattern,
             "count": items.len(),
+            "commits": commits,
             // The text output says so in its header; without it here an agent
             // reading JSON cannot tell a complete answer from a capped one.
             "more_available": results.more_available,
@@ -237,7 +248,10 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
     }
 
     for key in order {
-        let items = &grouped[&key];
+        // Ranking chose which hits made the page; within one file, reading
+        // them top to bottom is what makes the file's shape legible.
+        let mut items = grouped[&key].clone();
+        items.sort_by_key(|item| item.line_number);
         // Flag stale sources inline. A pattern from a project that stopped
         // moving years ago may well be out of date, and the reader cannot know
         // that from the snippet alone.
@@ -264,20 +278,9 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             String::new()
         };
         out.push_str(&format!("\n{} {}{date}\n", key.0, key.1));
+        let mut previous_scope: Option<&str> = None;
+        let mut previous_window = 0usize;
         for item in items {
-            // A gutter of real line numbers lets the agent cite an exact
-            // location and lets a person scroll straight to it.
-            out.push('\n');
-            // Skip the scope line when the match is the definition itself, or
-            // when the definition is already visible in the context below it.
-            let start = item.context_start();
-            let scope_shown = item
-                .context
-                .iter()
-                .any(|line| line.trim() == item.scope.trim());
-            if !item.scope.is_empty() && !scope_shown {
-                out.push_str(&format!("  in {}\n", item.scope));
-            }
             // Trim blank lines from the edges of the window. They cost a
             // gutter each and say nothing; a blank line between two matched
             // lines is kept, since it is part of the shape of the code.
@@ -286,13 +289,41 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
             let (Some(first), Some(last)) = (first, last) else {
                 continue;
             };
-            let width = (start + last).to_string().len();
+            let window = last - first + 1;
+            // Skip the scope line when the definition is already visible in
+            // the context, or when the previous hit in this file named it.
+            let start = item.context_start();
+            let scope_shown = item
+                .context
+                .iter()
+                .any(|line| line.trim() == item.scope.trim());
+            let scope_line = !item.scope.is_empty()
+                && !scope_shown
+                && previous_scope != Some(item.scope.as_str());
+            previous_scope = Some(item.scope.as_str());
+            // Single-line hits (-C 0) read as one grep-like list; a blank line
+            // between each doubled their cost and separated nothing.
+            if previous_window != 1 || window != 1 || scope_line {
+                out.push('\n');
+            }
+            previous_window = window;
+            if scope_line {
+                out.push_str(&format!("  in {}\n", item.scope));
+            }
+            // A gutter of real line numbers lets the agent cite an exact
+            // location and lets a person scroll straight to it. A tab rather
+            // than padding and a box character: same alignment, fewer tokens.
             for (offset, line) in item.context[first..=last].iter().enumerate() {
                 let number = start + first + offset;
                 let marker = if number == item.line_number { ">" } else { " " };
+                out.push_str(&format!("{marker}{number}\t{}\n", clamp(line)));
+            }
+            if let Some(end) = item.body_end {
                 out.push_str(&format!(
-                    "{marker} {number:>width$} \u{2502} {}\n",
-                    clamp(line)
+                    "  … continues to line {end}: steroids show {} {} --from {} --to {end}\n",
+                    item.repo,
+                    item.path,
+                    start + item.context.len()
                 ));
             }
         }
@@ -370,6 +401,7 @@ mod budget_tests {
                 commit_sha: String::new(),
                 context_first_line: 5,
                 pushed_at: String::new(),
+                body_end: None,
             })
             .collect()
     }
@@ -465,6 +497,7 @@ mod line_length_tests {
             commit_sha: String::new(),
             context_first_line: 1,
             pushed_at: String::new(),
+            body_end: None,
         };
         let out = super::render_matches(std::slice::from_ref(&item), "1 match");
         assert!(

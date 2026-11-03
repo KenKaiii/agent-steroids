@@ -356,6 +356,10 @@ pub struct Upstream {
     /// Date of the most recent commit. This is what "abandoned" means.
     pub pushed_at: String,
     pub archived: bool,
+    /// Version the root manifest declares (package.json, Cargo.toml,
+    /// pyproject.toml), empty when there is none. A commit hash cannot tell an
+    /// agent whether the snapshot is the release it is porting.
+    pub version: String,
 }
 
 /// Fetch a text endpoint with the shared headers.
@@ -538,6 +542,64 @@ pub fn prepare(name: &str, include_tests: bool) -> Result<PreparedRepo> {
     prepare_from_tarball(repo, upstream, reader, include_tests)
 }
 
+const MANIFESTS: &[&str] = &["package.json", "Cargo.toml", "pyproject.toml"];
+const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
+
+fn is_manifest(path: &str) -> bool {
+    MANIFESTS.contains(&path)
+}
+
+/// The release a root manifest declares. Workspace roots and private
+/// packages often carry none, or a placeholder, and that is reported as none.
+fn manifest_version(path: &str, text: &str) -> Option<String> {
+    let version = if path == "package.json" {
+        serde_json::from_str::<serde_json::Value>(text)
+            .ok()?
+            .get("version")?
+            .as_str()?
+            .to_string()
+    } else {
+        // Only the sections that describe the package itself: a dependency
+        // table also has `version = ` lines, for someone else's release.
+        let mut section = String::new();
+        let mut found = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                section = line.trim_matches(['[', ']']).trim().to_string();
+                continue;
+            }
+            if !matches!(
+                section.as_str(),
+                "package" | "workspace.package" | "project" | "tool.poetry"
+            ) {
+                continue;
+            }
+            // The quoted string only: `version = "15.2.0"  #:version` is real.
+            if let Some(value) = line
+                .strip_prefix("version")
+                .map(str::trim_start)
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(str::trim_start)
+                .and_then(|value| {
+                    let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+                    value[1..].split(quote).next()
+                })
+            {
+                found = Some(value.to_string());
+                break;
+            }
+        }
+        found?
+    };
+    let version = version.trim();
+    let usable = !version.is_empty()
+        && version.len() <= 64
+        && version != "0.0.0"
+        && version.chars().next().is_some_and(|c| c.is_ascii_digit());
+    usable.then(|| version.to_string())
+}
+
 /// Everything `prepare` does after the download, so a crafted archive can be
 /// pushed through the real path without a network.
 fn prepare_from_tarball(
@@ -592,6 +654,17 @@ fn prepare_from_tarball(
         }
         seen += 1;
 
+        // Manifests are not source and are never indexed, so their version is
+        // read here, on the way past.
+        if upstream.version.is_empty() && size <= MAX_MANIFEST_BYTES && is_manifest(path) {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok()
+                && let Some(version) = manifest_version(path, &text)
+            {
+                upstream.version = version;
+            }
+            continue;
+        }
         if !should_index(path, size, include_tests) {
             continue;
         }
@@ -664,6 +737,43 @@ pub fn commit(prepared: &PreparedRepo, store: &mut Store) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manifest_versions_come_from_the_package_itself() {
+        use super::manifest_version;
+        assert_eq!(
+            manifest_version("package.json", r#"{"name":"axios","version":"1.21.0"}"#).as_deref(),
+            Some("1.21.0")
+        );
+        let cargo =
+            "[package]\nname = \"x\"\nversion = \"0.3.2\"\n[dependencies]\nversion = \"9\"\n";
+        assert_eq!(
+            manifest_version("Cargo.toml", cargo).as_deref(),
+            Some("0.3.2")
+        );
+        let commented = "[package]\nversion = \"15.2.0\"  #:version\n";
+        assert_eq!(
+            manifest_version("Cargo.toml", commented).as_deref(),
+            Some("15.2.0")
+        );
+        let inherited = "[package]\nversion.workspace = true\n";
+        assert_eq!(manifest_version("Cargo.toml", inherited), None);
+        let workspace =
+            "[workspace]\nmembers = []\n[workspace.dependencies]\nserde = { version = \"1\" }\n";
+        assert_eq!(manifest_version("Cargo.toml", workspace), None);
+        let py = "[project]\nname = 'x'\nversion = '2.1.0'\n";
+        assert_eq!(
+            manifest_version("pyproject.toml", py).as_deref(),
+            Some("2.1.0")
+        );
+        let dynamic = "[project]\ndynamic = [\"version\"]\n";
+        assert_eq!(manifest_version("pyproject.toml", dynamic), None);
+        assert_eq!(
+            manifest_version("package.json", r#"{"version":"0.0.0"}"#),
+            None
+        );
+        assert_eq!(manifest_version("package.json", "not json"), None);
+    }
+
     use super::*;
 
     /// A dropped connection, then a 503, then a real answer: the first two

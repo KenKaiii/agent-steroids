@@ -65,6 +65,9 @@ pub struct Match {
     /// Lets a reader weigh a snippet from a project that stopped moving years
     /// ago differently from one changed this week.
     pub pushed_at: String,
+    /// Set when `context` is a definition's body cut short: the line the body
+    /// really ends on, so the reader knows there is more and where.
+    pub body_end: Option<usize>,
 }
 
 impl Match {
@@ -73,17 +76,14 @@ impl Match {
         self.context_first_line
     }
 
-    /// A GitHub permalink to the matched line, if the commit is known.
-    pub fn permalink(&self) -> Option<String> {
+    /// The snapshot's git commit, when it is one GitHub can resolve.
+    pub fn commit(&self) -> Option<&str> {
         // A git hash is 40 hex characters. Anything else is our archive
         // checksum, which GitHub will not resolve.
         if self.commit_sha.len() != 40 || !self.commit_sha.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
-        Some(format!(
-            "https://github.com/{}/blob/{}/{}#L{}",
-            self.repo, self.commit_sha, self.path, self.line_number
-        ))
+        Some(&self.commit_sha)
     }
 }
 
@@ -119,7 +119,7 @@ impl<'a> Query<'a> {
     }
 }
 
-fn is_prose(line: &str) -> bool {
+pub(crate) fn is_prose(line: &str) -> bool {
     let trimmed = line.trim();
     if COMMENT_PREFIXES
         .iter()
@@ -162,7 +162,7 @@ const TRIPLE_SINGLE: &str = "'''";
 ///
 /// Showing a comment that should have been filtered is a small cost. Hiding
 /// real code the user asked for is not.
-fn prose_lines(lines: &[&str], language: &str) -> HashSet<usize> {
+pub(crate) fn prose_lines(lines: &[&str], language: &str) -> HashSet<usize> {
     // Docstring syntax is per-language; looking for the wrong delimiters is
     // what desynchronises the scanner.
     let (delimiters, max_lines): (&[(&str, &str)], usize) = match language {
@@ -241,15 +241,127 @@ fn enclosing_scope(lines: &[&str], number: usize) -> String {
         "static ",
         "export ",
         "async ",
+        "function ",
     ];
-    for line in lines[..number.min(lines.len())].iter().rev() {
+    let Some(matched) = number.checked_sub(1).and_then(|index| lines.get(index)) else {
+        return String::new();
+    };
+    // A header only encloses the match if it is indented less than every code
+    // line between them; otherwise that block closed before the match, and
+    // naming it told the reader a top-level `const` lived inside a function.
+    let mut ceiling = indent_of(matched);
+    for line in lines[..number - 1].iter().rev() {
+        if ceiling == 0 {
+            break;
+        }
         let trimmed = line.trim_start();
-        if KEYWORDS.iter().any(|word| trimmed.starts_with(word)) && !is_prose(line) {
-            let text = line.trim();
-            return text.chars().take(120).collect();
+        if trimmed.is_empty() || is_prose(line) {
+            continue;
+        }
+        let indent = indent_of(line);
+        let header = without_visibility(trimmed);
+        if indent < ceiling && KEYWORDS.iter().any(|word| header.starts_with(word)) {
+            return line.trim().chars().take(120).collect();
+        }
+        // Signature continuations (`) -> T {`, `where`, a lone `{`) sit at
+        // the header's indent without closing anything.
+        let continues = trimmed.starts_with([')', '{', ']']) || trimmed.starts_with("where");
+        if !continues {
+            ceiling = ceiling.min(indent);
         }
     }
     String::new()
+}
+
+/// Leading whitespace width, a tab counting as four columns.
+pub(crate) fn indent_of(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
+}
+
+/// `const name = (…) =>`, `let name = function`, and the like: how JavaScript
+/// and TypeScript define most functions, with no keyword of their own.
+pub(crate) fn binds_function(trimmed: &str) -> bool {
+    let rest = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+    let Some(rest) = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|word| rest.strip_prefix(word))
+    else {
+        return false;
+    };
+    let name_end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(rest.len());
+    if name_end == 0 {
+        return false;
+    }
+    let Some(value) = rest[name_end..]
+        .split_once('=')
+        .map(|(annotation, value)| (annotation.trim_start(), value.trim_start()))
+        .filter(|(annotation, _)| annotation.is_empty() || annotation.starts_with(':'))
+        .map(|(_, value)| value)
+    else {
+        return false;
+    };
+    let value = value.strip_prefix("async").map_or(value, str::trim_start);
+    if value.starts_with("function") || value.starts_with("class") {
+        return true;
+    }
+    // `(…) =>`, or parameters that continue on the next line.
+    if value.starts_with('(') {
+        return value.contains("=>") || value.trim_end() == "(";
+    }
+    // `x => …`: a single bare parameter.
+    let parameter_end = value
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(value.len());
+    parameter_end > 0 && value[parameter_end..].trim_start().starts_with("=>")
+}
+
+/// A `let`/`var`/`const`/`:=` hit inside a function: a local variable.
+pub fn is_local_binding(hit: &Match) -> bool {
+    let line = hit
+        .context
+        .get(hit.line_number.saturating_sub(hit.context_first_line))
+        .map(|line| line.trim_start())
+        .unwrap_or_default();
+    let binds = ["let ", "var ", "const "]
+        .iter()
+        .any(|word| line.starts_with(word))
+        || (line.contains(":=") && !line.starts_with("func"));
+    let scope = without_visibility(hit.scope.trim_start());
+    let in_function = [
+        "fn ",
+        "def ",
+        "async ",
+        "func ",
+        "function",
+        "unsafe fn ",
+        "const fn ",
+    ]
+    .iter()
+    .any(|word| scope.starts_with(word))
+        || binds_function(scope);
+    binds && in_function && !binds_function(line)
+}
+
+/// `line` without a leading Rust `pub` / `pub(crate)`, so `pub fn` is seen as
+/// a scope instead of being skipped for the private one above it.
+pub(crate) fn without_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    if rest.starts_with(' ') {
+        return rest.trim_start();
+    }
+    if rest.starts_with('(')
+        && let Some(close) = rest.find(')')
+    {
+        return rest[close + 1..].trim_start();
+    }
+    line
 }
 
 /// Index just past the group or character class opening at `start`.
@@ -815,7 +927,7 @@ pub fn diagnose(store: &mut Store, pattern: &str) -> Result<Facts> {
 /// any depth. `**/` also matches zero directories, so `**/src/**` finds a
 /// top-level `src/lib.rs`; and a trailing `/**` accepts its bare prefix, so
 /// the `src/lib.rs/**` that `path_filter` makes of a file name finds the file.
-fn glob_matches(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
     // simplification: backtracks on every `*`, so a pattern of many stars
     // against a long path is polynomial; paths are short and `path_filter`
     // caps `**/`. Upgrade path: memoise on (pattern, text) offsets.
@@ -871,10 +983,13 @@ fn relevance(item: &Match) -> u32 {
         "async def ",
         "public ",
         "private ",
+        "function ",
+        "async function ",
     ];
     if DEFINITION_KEYWORDS
         .iter()
         .any(|word| trimmed.starts_with(word))
+        || binds_function(trimmed)
     {
         score += 7000;
     }
@@ -1122,7 +1237,7 @@ fn hydrate_candidates(store: &Store, ids: &[i64]) -> Result<Vec<(i64, String, St
 pub fn definition_pattern(symbol: &str) -> String {
     let escaped = regex::escape(symbol);
     format!(
-        r"(?m)\b(def|class|func|fn|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}(\s*(\(|:|=|<|\{{|\[|$)|\s+(where|extends|implements|struct|interface|\{{))|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
+        r"(?m)\b(def|class|func|fn|function\*?|type|struct|interface|impl|enum|trait|const|var|let|export|public)\s+(async\s+)?\b{escaped}(\s*(\(|:|=|<|\{{|\[|$)|\s+(where|extends|implements|struct|interface|\{{))|\b{escaped}\s*(=|:=)\s*(function|async|\(|\{{|class)"
     )
 }
 
@@ -1195,7 +1310,11 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
     if pattern.is_empty() {
         bail!("pattern must not be empty");
     }
+    // Whole documents are matched before lines, so without multi_line `^` and
+    // `$` only anchored at the file's ends and `^const ` found nothing.
     let matcher = RegexBuilder::new(pattern)
+        .multi_line(true)
+        .crlf(true)
         .case_insensitive(query.ignore_case)
         .build()
         .map_err(|error| {
@@ -1435,6 +1554,7 @@ pub fn search(store: &mut Store, pattern: &str, query: &Query) -> Result<SearchR
                 commit_sha: meta.0.clone(),
                 context_first_line: low + 1,
                 pushed_at: meta.1.clone(),
+                body_end: None,
             });
             collected += 1;
             if bucket.len() >= per_repo_cap {
@@ -1617,7 +1737,11 @@ mod tests {
             commit_sha: String::new(),
             context_first_line: 1,
             pushed_at: String::new(),
+            body_end: None,
         };
+        let js_definition = make("const isPlainObject = (val) => {", "lib/utils.js");
+        let js_use = make("  isPlainObject,", "lib/utils.js");
+        assert!(super::relevance(&js_definition) > super::relevance(&js_use));
         let definition = make("pub struct RetryPolicy {", "src/retry.rs");
         let import = make("use crate::retry::RetryPolicy;", "src/main.rs");
         let usage = make("    let policy = RetryPolicy::new(3);", "src/main.rs");
@@ -1649,6 +1773,12 @@ mod tests {
             "public class ToolCallResult extends Base {",
             "enum ToolCallResult",
             "export const ToolCallResult: Foo = {",
+            // JavaScript declarations, including axios's `forEach`, which a
+            // keyword list without `function` never found.
+            "function ToolCallResult(obj, fn, { allOwnKeys = false } = {}) {",
+            "export default function ToolCallResult(a) {",
+            "export async function ToolCallResult() {",
+            "function* ToolCallResult() {",
         ] {
             assert!(re.is_match(line), "missed definition: {line}");
         }
@@ -1739,10 +1869,10 @@ mod tests {
         }
     }
 
-    /// Permalinks must only be offered when the stored hash is a real git
+    /// A commit must only be offered when the stored hash is a real git
     /// commit; our archive checksum is 64 hex characters and GitHub 404s on it.
     #[test]
-    fn permalink_only_for_real_commits() {
+    fn commit_only_for_real_commits() {
         let base = super::Match {
             repo: "psf/requests".into(),
             path: "src/requests/api.py".into(),
@@ -1752,10 +1882,11 @@ mod tests {
             commit_sha: "5460f467b02e49471c0fd6cfc9ca0adab6351f98".into(),
             context_first_line: 14,
             pushed_at: String::new(),
+            body_end: None,
         };
         assert_eq!(
-            base.permalink().unwrap(),
-            "https://github.com/psf/requests/blob/5460f467b02e49471c0fd6cfc9ca0adab6351f98/src/requests/api.py#L14"
+            base.commit(),
+            Some("5460f467b02e49471c0fd6cfc9ca0adab6351f98")
         );
 
         // Archive ETag: 64 hex characters, not a commit.
@@ -1763,7 +1894,7 @@ mod tests {
             commit_sha: "f6cd16327faa77e0f40488d4d4a1c218803857bf51eb34d73c06ac3cde2303b3".into(),
             ..base
         };
-        assert!(etag.permalink().is_none(), "offered a link that would 404");
+        assert!(etag.commit().is_none(), "offered a link that would 404");
     }
 
     /// A search confined to one repository must still fill the requested
@@ -1950,6 +2081,157 @@ mod tests {
             assert_eq!(in_sql, expected, "SQL {glob} vs {path}: {globs:?}");
         }
         assert!(path_filter("**/**/**/**/**/x").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn scope_sees_public_rust_and_javascript_functions() {
+        let rust = [
+            "fn helper() -> u8 {",
+            "    1",
+            "}",
+            "pub fn save_config<F: Fs>(",
+            "    fs: &F,",
+            ") -> Result<()> {",
+            "    lock(fs)?;",
+        ];
+        assert_eq!(enclosing_scope(&rust, 7), "pub fn save_config<F: Fs>(");
+        let crate_only = ["pub(crate) async fn run() {", "    go();"];
+        assert_eq!(
+            enclosing_scope(&crate_only, 2),
+            "pub(crate) async fn run() {"
+        );
+        let field = ["struct A {", "    pub name: String,", "}"];
+        assert_eq!(enclosing_scope(&field, 2), "struct A {");
+        let js = ["const x = 1;", "function forEach(obj, fn) {", "  fn(obj);"];
+        assert_eq!(enclosing_scope(&js, 3), "function forEach(obj, fn) {");
+        assert_eq!(
+            enclosing_scope(&["public void run() {", "    x();"], 2),
+            "public void run() {"
+        );
+    }
+
+    /// The axios case: a top-level `const` after a closed function is in no
+    /// scope, and a block closed above the match is not its scope either.
+    #[test]
+    fn scope_ignores_blocks_that_closed_before_the_match() {
+        let js = [
+            "function isArrayBufferView(val) {",
+            "  return val;",
+            "}",
+            "",
+            "const isPlainObject = (val) => {",
+        ];
+        assert_eq!(enclosing_scope(&js, 5), "");
+        let nested = [
+            "class Store {",
+            "  open() {",
+            "    lock();",
+            "  }",
+            "  close() {}",
+            "  name = 'x';",
+        ];
+        assert_eq!(enclosing_scope(&nested, 6), "class Store {");
+        let python = ["def outer():", "    # note", "    if x:", "        go()"];
+        assert_eq!(enclosing_scope(&python, 4), "def outer():");
+        let where_clause = [
+            "fn f<T>(t: T)",
+            "where",
+            "    T: Clone,",
+            "{",
+            "    t.clone();",
+        ];
+        assert_eq!(enclosing_scope(&where_clause, 5), "fn f<T>(t: T)");
+    }
+
+    #[test]
+    fn locals_inside_functions_are_not_definitions() {
+        let hit = |line: &str, scope: &str| Match {
+            repo: "a/b".into(),
+            path: "src/x.rs".into(),
+            line_number: 1,
+            context: vec![line.to_string()],
+            scope: scope.into(),
+            commit_sha: String::new(),
+            context_first_line: 1,
+            pushed_at: String::new(),
+            body_end: None,
+        };
+        assert!(is_local_binding(&hit(
+            "        let line_terminator = if multi {",
+            "pub(crate) fn replace_all<'a>("
+        )));
+        assert!(is_local_binding(&hit(
+            "  const keys = Object.keys(obj);",
+            "function forEach(obj) {"
+        )));
+        assert!(!is_local_binding(&hit(
+            "const isPlainObject = (val) => {",
+            ""
+        )));
+        assert!(!is_local_binding(&hit(
+            "    const MAX: usize = 4;",
+            "impl Searcher {"
+        )));
+        assert!(!is_local_binding(&hit(
+            "  const inner = (x) => x;",
+            "function outer() {"
+        )));
+    }
+
+    #[test]
+    fn javascript_function_bindings_are_definitions() {
+        for line in [
+            "const isPlainObject = (val) => {",
+            "export const toArray = async (thing) => {",
+            "let handler = function (event) {",
+            "const parse = input => input.trim();",
+            "const Store: Factory = (opts) => new Store(opts);",
+            "var Klass = class {",
+        ] {
+            assert!(binds_function(line), "missed: {line}");
+        }
+        for line in [
+            "const value = compute(1);",
+            "const items = list.map((i) => i);",
+            "const re = /x/;",
+            "let count = 0;",
+            "constant = (1)",
+            "const total = (a + b) * 2;",
+        ] {
+            assert!(!binds_function(line), "false definition: {line}");
+        }
+    }
+
+    /// `^` and `$` anchor at every line, as in grep and ripgrep, including
+    /// CRLF files.
+    #[test]
+    fn anchors_match_at_every_line() -> Result<()> {
+        let dir = crate::store::scratch_dir("anchors");
+        let mut store = crate::store::Store::open_for_write(&dir)?;
+        let id = store.add_repo("a/anchors", &crate::fetch::Upstream::default())?;
+        let body = "// utilities shared by the helpers below\r\nconst first = 1;\r\n\r\nfunction second() {}\r\nconst third = 3;\r\n";
+        store.add_document(id, "lib/utils.js", "javascript", body.as_bytes().to_vec())?;
+        store.flush_pending()?;
+        crate::index::build(&mut store, &mut |_: usize, _: usize| {})?;
+        let lines_of = |store: &mut crate::store::Store, pattern: &str| -> Result<Vec<usize>> {
+            // No context, so neighbouring hits are not folded into one block.
+            let query = Query {
+                context_lines: 0,
+                ..Query::new(20)
+            };
+            Ok(search(store, pattern, &query)?
+                .matches
+                .iter()
+                .map(|hit| hit.line_number)
+                .collect())
+        };
+        assert_eq!(lines_of(&mut store, "^const ")?, vec![2, 5]);
+        assert_eq!(lines_of(&mut store, "^function second")?, vec![4]);
+        assert_eq!(lines_of(&mut store, r"= 1;$")?, vec![2]);
+        assert_eq!(lines_of(&mut store, r"^\s*const third")?, vec![5]);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

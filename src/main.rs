@@ -10,6 +10,7 @@ mod discover;
 mod fetch;
 mod filters;
 mod index;
+mod outline;
 mod recent;
 mod render;
 mod root;
@@ -132,6 +133,13 @@ enum Command {
     /// Find where a function, class or constant is defined
     Define {
         symbol: String,
+        /// Only these repositories; each definition is then printed whole,
+        /// up to 150 lines, instead of a few lines around it
+        #[arg(long, value_delimiter = ',')]
+        repo: Vec<String>,
+        /// Path glob or prefix, e.g. 'lib/utils.js' or 'src'
+        #[arg(long)]
+        path: Option<String>,
         /// Only repositories carrying this label
         #[arg(long)]
         tag: Option<String>,
@@ -158,9 +166,22 @@ enum Command {
         #[arg(long)]
         to: Option<usize>,
         /// Print at most this many lines. A large file otherwise costs tens of
-        /// thousands of tokens to read.
-        #[arg(long, default_value_t = 400)]
-        limit: usize,
+        /// thousands of tokens to read. Defaults to 400 unless --to is given.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Stop adding lines once the output would exceed this many tokens
+        #[arg(long)]
+        max_tokens: Option<usize>,
+        /// Print only these definitions' bodies, e.g. --symbols forEach,isPlainObject
+        #[arg(long, value_delimiter = ',', conflicts_with_all = ["from", "to", "outline"])]
+        symbols: Vec<String>,
+        /// Print only what the file declares, with line numbers; in a test
+        /// file, its test cases and assertions too
+        #[arg(long, conflicts_with_all = ["from", "to"])]
+        outline: bool,
+        /// Leave out comments, docstrings and blank lines; numbering is kept
+        #[arg(long)]
+        no_comments: bool,
         /// Emit JSON instead of text
         #[arg(long)]
         json: bool,
@@ -168,6 +189,9 @@ enum Command {
     /// List the files indexed for one repository
     Files {
         repo: String,
+        /// Only paths under this prefix or matching this glob, e.g. lib/helpers
+        #[arg(long)]
+        path: Option<String>,
         /// Most files to list; --json lists every file when unset
         #[arg(long)]
         limit: Option<usize>,
@@ -204,6 +228,8 @@ enum Command {
     },
     /// List indexed repositories
     Repos {
+        /// Only repositories whose name contains this text, e.g. axios
+        filter: Option<String>,
         /// Only repositories carrying this tag
         #[arg(long)]
         tag: Option<String>,
@@ -420,6 +446,66 @@ fn check_positive(flag: &str, value: Option<usize>) -> Result<()> {
         bail!("{flag} must be at least 1");
     }
     Ok(())
+}
+
+/// Lines `show` prints by default, so reading a whole large file stays affordable.
+const SHOW_LIMIT: usize = 400;
+
+/// Last line `show` prints. An explicit --to is a request for exactly that
+/// range: capping it at the default silently returned less than was asked, and
+/// agents re-read overlapping windows to find the rest.
+fn show_end(
+    total: usize,
+    start: usize,
+    from: Option<usize>,
+    to: Option<usize>,
+    limit: Option<usize>,
+) -> usize {
+    // A range around a known line is the common case, so default to a window
+    // rather than the rest of the file.
+    let wanted = to.unwrap_or(if from.is_some() {
+        start.saturating_add(120)
+    } else {
+        usize::MAX
+    });
+    let cap = limit.unwrap_or(if to.is_some() { usize::MAX } else { SHOW_LIMIT });
+    wanted.min(total).min(start.saturating_add(cap - 1))
+}
+
+/// Replace a definition hit's context with the definition itself, so one
+/// `define --repo` answers what a follow-up `show` used to.
+fn expand_to_body(store: &mut Store, hit: &mut search::Match) -> Result<()> {
+    let Some(content) = store.read_path(&hit.repo, &hit.path)? else {
+        return Ok(());
+    };
+    let text = String::from_utf8_lossy(&content);
+    let lines: Vec<&str> = text.lines().collect();
+    let language = filters::language_of(&hit.path).unwrap_or("");
+    let start = hit.line_number;
+    if start == 0 || start > lines.len() {
+        return Ok(());
+    }
+    let end = outline::block_end(&lines, start, language);
+    let shown = end.min(start + outline::MAX_BODY_LINES - 1);
+    hit.context = lines[start - 1..shown]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    hit.context_first_line = start;
+    hit.body_end = (shown < end).then_some(end);
+    Ok(())
+}
+
+/// What snapshot of a repository is indexed: the release its manifest
+/// declared, and the commit, so "is this the version I am porting?" is
+/// answered without grepping for it.
+fn snapshot_label(summary: &store::RepoSummary) -> String {
+    let commit = &summary.commit_sha[..8.min(summary.commit_sha.len())];
+    match (summary.version.is_empty(), commit.is_empty()) {
+        (false, false) => format!("v{} ({commit})", summary.version),
+        (false, true) => format!("v{}", summary.version),
+        _ => commit.to_string(),
+    }
 }
 
 /// Below this not even one match fits, and the budget silently means "one".
@@ -911,6 +997,8 @@ fn run(cli: Cli) -> Result<()> {
 
         Command::Define {
             symbol,
+            repo,
+            path,
             tag,
             language,
             limit,
@@ -930,9 +1018,19 @@ fn run(cli: Cli) -> Result<()> {
             let tag = nonempty_tag(tag)?;
             let language = language.as_deref().map(filters::canonical_language);
             let escaped = regex::escape(&symbol);
+            let glob = path.as_deref().map(search::path_filter).transpose()?;
+            let (repos, missing) = resolve_repos(&store, &repo)?;
+            if !missing.is_empty() {
+                bail!(
+                    "not in corpus: {}; `steroids repos <name>` finds the stored spelling",
+                    missing.join(", ")
+                );
+            }
             let query = Query {
+                repos: &repos,
                 tag: tag.as_deref(),
                 language: language.as_deref(),
+                path_glob: glob.as_deref(),
                 ..Query::new(limit)
             };
             let mut matches =
@@ -945,6 +1043,24 @@ fn run(cli: Cli) -> Result<()> {
                     .unwrap_or_default();
                 !search::is_binding_not_definition(line, &symbol)
             });
+            // A variable bound inside a function shares the name but is not
+            // what `define` is for; keep such hits only if nothing better
+            // exists.
+            if matches
+                .matches
+                .iter()
+                .any(|hit| !search::is_local_binding(hit))
+            {
+                matches.matches.retain(|hit| !search::is_local_binding(hit));
+            }
+            // Scoped to known repositories, the reader is about to use the
+            // code, not compare projects: the whole body answers that in one
+            // call, where five lines of context sent it to read the file.
+            if !repos.is_empty() || glob.is_some() {
+                for hit in matches.matches.iter_mut() {
+                    expand_to_body(&mut store, hit)?;
+                }
+            }
             let unindexed = search::unindexed(&store)?;
             if json {
                 let facts;
@@ -966,8 +1082,10 @@ fn run(cli: Cli) -> Result<()> {
                     &mut store,
                     &format!(r"\b{escaped}\b"),
                     &Query {
+                        repos: &repos,
                         tag: tag.as_deref(),
                         language: language.as_deref(),
+                        path_glob: glob.as_deref(),
                         ..Query::new(100)
                     },
                 )?;
@@ -1002,87 +1120,93 @@ fn run(cli: Cli) -> Result<()> {
             from,
             to,
             limit,
+            max_tokens,
+            symbols,
+            outline,
+            no_comments,
             json,
         } => {
+            check_positive("--limit", limit)?;
+            if let Some(budget) = max_tokens {
+                check_token_budget(budget)?;
+            }
             let repo = resolve_repo(&store, &repo)?;
-            match store.read_path(&repo, &path)? {
-                Some(content) => {
-                    let text = String::from_utf8_lossy(&content);
-                    let lines: Vec<&str> = text.lines().collect();
-                    let start = from.unwrap_or(1).max(1);
-                    if limit == 0 {
-                        bail!("--limit must be at least 1");
-                    }
-                    if to.is_some_and(|to| to < start) {
-                        bail!("--to ({}) is before --from ({start})", to.unwrap_or(0));
-                    }
-                    // A range around a known line is the common case, so default
-                    // to a window rather than the rest of the file.
-                    let end = to
-                        .unwrap_or(if from.is_some() {
-                            start + 120
-                        } else {
-                            usize::MAX
-                        })
-                        .min(lines.len())
-                        .min(start + limit - 1);
-
-                    if json {
-                        let slice = if start > lines.len() {
-                            &lines[..0]
-                        } else {
-                            &lines[start - 1..end]
-                        };
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "repo": repo,
-                                "path": path,
-                                "from": start,
-                                "to": if slice.is_empty() { 0 } else { end },
-                                "total_lines": lines.len(),
-                                "lines": slice,
-                            })
-                        );
-                        return Ok(());
-                    }
-                    println!("# {repo}/{path}");
-                    if start > lines.len() {
-                        println!("\nFile has {} lines; nothing at line {start}.", lines.len());
-                        return Ok(());
-                    }
-                    println!(
-                        "# lines {start}-{end} of {}{}\n",
-                        lines.len(),
-                        if end < lines.len() {
-                            "  (use --from/--to for the rest)"
-                        } else {
-                            ""
-                        }
-                    );
-                    // Numbered, so a line an agent reads here matches the number a
-                    // search result gave it.
-                    let width = end.to_string().len();
-                    for (offset, line) in lines[start - 1..end].iter().enumerate() {
-                        println!("{:>width$} \u{2502} {line}", start + offset);
-                    }
-                }
-                None => bail!("not in corpus: {repo}/{path}"),
+            let Some(content) = store.read_path(&repo, &path)? else {
+                bail!(
+                    "not in corpus: {repo}/{path}; `steroids files {repo} --path <dir>` lists what is indexed"
+                );
+            };
+            let text = String::from_utf8_lossy(&content);
+            let lines: Vec<&str> = text.lines().collect();
+            let start = from.unwrap_or(1).max(1);
+            if to.is_some_and(|to| to < start) {
+                bail!("--to ({}) is before --from ({start})", to.unwrap_or(0));
+            }
+            let symbols: Vec<String> = symbols
+                .into_iter()
+                .filter(|symbol| !symbol.trim().is_empty())
+                .collect();
+            print!(
+                "{}",
+                outline::render_show(
+                    &lines,
+                    &outline::ShowRequest {
+                        repo: &repo,
+                        path: &path,
+                        range: (start, show_end(lines.len(), start, from, to, limit)),
+                        symbols: &symbols,
+                        outline,
+                        no_comments,
+                        max_tokens,
+                        json,
+                    },
+                )?
+            );
+            if json {
+                println!();
             }
         }
 
-        Command::Files { repo, limit, json } => {
+        Command::Files {
+            repo,
+            path,
+            limit,
+            json,
+        } => {
             check_positive("--limit", limit)?;
             let repo = resolve_repo(&store, &repo)?;
+            let glob = path.as_deref().map(search::path_filter).transpose()?;
             // Text is read by a person, so it is capped; JSON is read by a
-            // program that asked for the list, so it gets the list.
-            let cap = limit.unwrap_or(if json { usize::MAX } else { 200 });
-            let paths = store.list_files(&repo, cap)?;
+            // program that asked for the list, so it gets the list. A --path
+            // already narrows the list, so it lifts the cap.
+            let cap = limit.unwrap_or(if json || glob.is_some() {
+                usize::MAX
+            } else {
+                200
+            });
+            let mut paths = store.list_files(&repo, usize::MAX)?;
             if paths.is_empty() {
                 bail!(
                     "no files indexed for {repo}; `steroids index --refilter` removes empty repositories"
                 );
             }
+            if let Some(glob) = &glob {
+                paths.retain(|(path, _, _)| search::glob_matches(glob, path));
+                if paths.is_empty() {
+                    bail!(
+                        "no indexed file in {repo} matches --path {}; drop it to see every file",
+                        path.as_deref().unwrap_or_default()
+                    );
+                }
+            }
+            let total = paths.len();
+            paths.truncate(cap);
+            let version = store
+                .list_repos()?
+                .into_iter()
+                .find(|summary| summary.name == repo)
+                .map(|summary| snapshot_label(&summary))
+                .unwrap_or_default();
             if json {
                 let files: Vec<serde_json::Value> = paths
                     .iter()
@@ -1092,7 +1216,13 @@ fn run(cli: Cli) -> Result<()> {
                     .collect();
                 println!(
                     "{}",
-                    serde_json::json!({ "repo": repo, "count": files.len(), "files": files })
+                    serde_json::json!({
+                        "repo": repo,
+                        "snapshot": version,
+                        "count": files.len(),
+                        "total": total,
+                        "files": files,
+                    })
                 );
                 return Ok(());
             }
@@ -1103,20 +1233,34 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{path}\t{language}\t{size}");
             }
             eprintln!(
-                "{} files shown for {repo}{}",
+                "{} of {total} files shown for {repo} at {version}{}",
                 paths.len(),
-                if paths.len() == cap {
-                    " (raise --limit for more)"
+                if paths.len() < total {
+                    " (narrow with --path, or raise --limit)"
                 } else {
                     ""
                 }
             );
         }
 
-        Command::Repos { tag, json, limit } => {
+        Command::Repos {
+            filter,
+            tag,
+            json,
+            limit,
+        } => {
             check_positive("--limit", limit)?;
             let tag = nonempty_tag(tag)?;
-            let all = store.repos_tagged(tag.as_deref())?;
+            let mut all = store.repos_tagged(tag.as_deref())?;
+            if let Some(filter) = filter.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+                let needle = filter.to_lowercase();
+                all.retain(|summary| summary.name.to_lowercase().contains(&needle));
+                if all.is_empty() {
+                    bail!(
+                        "no indexed repository name contains '{filter}'; `steroids add owner/name` indexes one"
+                    );
+                }
+            }
             // A listing is read inside a context window. 444 repositories are
             // 12,000 tokens; 50,000 would be a million, for a command an
             // agent runs to get its bearings. A program parsing JSON asked
@@ -1130,6 +1274,7 @@ fn run(cli: Cli) -> Result<()> {
                     .map(|summary| {
                         serde_json::json!({
                             "repo": summary.name,
+                            "version": summary.version,
                             "commit": summary.commit_sha,
                             "indexed_at": summary.indexed_at,
                             "files": summary.files,
@@ -1139,29 +1284,28 @@ fn run(cli: Cli) -> Result<()> {
                             "last_commit": summary.pushed_at,
                             "tags": summary.tags.split(',').filter(|t| !t.is_empty())
                                 .collect::<Vec<_>>(),
-                            "url": format!("https://github.com/{}", summary.name),
                         })
                     })
                     .collect();
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
+                    serde_json::json!({
                         "count": all.len(),
                         "shown": rows.len(),
                         "repositories": items,
-                    }))?
+                    })
                 );
             } else if rows.is_empty() {
                 println!("  no repositories yet: steroids add owner/name");
             } else {
                 for summary in rows {
                     println!(
-                        "  {:<40} {:<12} {:>5} files  {:>8}  {}  {}",
+                        "  {:<40} {:<12} {:>5} files  {:>8}  {:<20}  {}",
                         link(&summary.name, 40),
                         summary.language,
                         summary.files,
                         human(summary.disk_bytes as f64),
-                        &summary.commit_sha[..8.min(summary.commit_sha.len())],
+                        snapshot_label(summary),
                         summary.indexed_at
                     );
                 }
@@ -1695,4 +1839,39 @@ fn ingest_all(
         println!("  {} already up to date", outcome.unchanged);
     }
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_to_is_not_capped_by_the_default_limit() {
+        // The benchmark case: 1..560 of a 1201-line file used to stop at 400.
+        assert_eq!(show_end(1201, 1, Some(1), Some(560), None), 560);
+        assert_eq!(show_end(1201, 1, Some(1), Some(560), Some(100)), 100);
+        assert_eq!(show_end(1201, 1, None, None, None), SHOW_LIMIT);
+        assert_eq!(show_end(1201, 10, Some(10), None, None), 130);
+        assert_eq!(show_end(50, 1, Some(1), Some(560), None), 50);
+        assert_eq!(show_end(50, usize::MAX, Some(usize::MAX), None, None), 50);
+    }
+
+    #[test]
+    fn snapshot_names_the_release_when_known() {
+        let mut summary = store::RepoSummary {
+            name: "axios/axios".into(),
+            commit_sha: "fb88a1b133c1a2d774713070b8ca25f7bcd382ac".into(),
+            indexed_at: String::new(),
+            files: 0,
+            source_bytes: 0,
+            disk_bytes: 0,
+            pushed_at: String::new(),
+            tags: String::new(),
+            language: String::new(),
+            version: "1.21.0".into(),
+        };
+        assert_eq!(snapshot_label(&summary), "v1.21.0 (fb88a1b1)");
+        summary.version.clear();
+        assert_eq!(snapshot_label(&summary), "fb88a1b1");
+    }
 }

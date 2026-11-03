@@ -148,9 +148,27 @@ ok "search --per-repo"         0 "match"         -- "$BIN" search "int" --per-re
 ok "search --max-tokens"       0 "match"         -- "$BIN" search "int" --max-tokens 500 --limit 20
 ok "show --from/--to"          0 "lines"         -- "$BIN" show antirez/smallchat smallchat-server.c --from 10 --to 20
 ok "show past end of file"     0 "nothing at"    -- "$BIN" show antirez/smallchat smallchat-server.c --from 999999
+ok "show --max-tokens"         0 "continue with --from" -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 50
+ok "show --max-tokens --json"  0 '"total_lines"' -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 50 --json
+ok "show max-tokens too low"   1 "at least 50"   -- "$BIN" show antirez/smallchat smallchat-server.c --max-tokens 10
+# Reading only what is needed: one definition, an outline, code without comments.
+ok "show --symbols"            0 "createClient"  -- "$BIN" show antirez/smallchat smallchat-server.c --symbols createClient
+ok "show --symbols unknown"    1 "--outline"     -- "$BIN" show antirez/smallchat smallchat-server.c --symbols noSuchThing
+ok "show --symbols with --from refused" 2 "cannot be used" -- "$BIN" show antirez/smallchat smallchat-server.c --symbols main --from 3
+ok "show --outline"            0 "outline:"      -- "$BIN" show antirez/smallchat smallchat-server.c --outline
+ok "show --outline --json"     0 '"blocks"'      -- "$BIN" show antirez/smallchat smallchat-server.c --outline --json
+ok "show --no-comments"        0 "comment lines hidden" -- "$BIN" show antirez/smallchat smallchat-server.c --no-comments
+ok "show explicit --to wins"   0 "lines 1-278"   -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278
+ok "define --repo prints body" 0 "int fd"        -- "$BIN" define client --repo antirez/smallchat
+ok "define --repo unknown"     1 "not in corpus" -- "$BIN" define client --repo ghost/repo
+ok "define --path"             0 "struct client" -- "$BIN" define client --path smallchat-server.c
+ok "files --path"              0 "smallchat-server.c" -- "$BIN" files antirez/smallchat --path smallchat-server.c
+ok "files --path no match"     1 "matches --path" -- "$BIN" files antirez/smallchat --path nowhere
+ok "repos <filter>"            0 "smallchat"     -- "$BIN" repos smallc
+ok "repos <filter> no match"   1 "no indexed repository" -- "$BIN" repos zzz-none
 ok "recent, repo not indexed"  0 "not in this corpus" -- "$BIN" recent --repo ghost/x --hours 24
 ok "search json has line map"  0 "context_first_line" -- "$BIN" search "int main" --json --limit 1
-ok "search json honours budget" 0 '"omitted": 1' -- "$BIN" search "int" --json --max-tokens 50 --limit 2
+ok "search json honours budget" 0 '"omitted":1' -- "$BIN" search "int" --json --max-tokens 50 --limit 2
 ok "define"                    0 ""              -- "$BIN" define main --limit 1
 ok "define --json"             0 ""              -- "$BIN" define main --json --limit 1
 ok "show"                      0 "smallchat"     -- "$BIN" show antirez/smallchat smallchat-server.c

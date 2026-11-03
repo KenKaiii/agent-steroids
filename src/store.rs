@@ -77,6 +77,7 @@ ALTER TABLE repos ADD COLUMN language TEXT;
 ALTER TABLE repos ADD COLUMN files INTEGER;
 ALTER TABLE repos ADD COLUMN source_bytes INTEGER;
 ALTER TABLE repos ADD COLUMN disk_bytes INTEGER;
+ALTER TABLE repos ADD COLUMN version TEXT;
 ";
 
 /// What the corpus knows about one indexed repository.
@@ -99,6 +100,8 @@ pub struct RepoSummary {
     /// kept, not GitHub's label, so it reflects the code in the corpus after
     /// filtering.
     pub language: String,
+    /// Release the root manifest declared at ingest, empty when unknown.
+    pub version: String,
 }
 
 pub struct Store {
@@ -344,10 +347,10 @@ impl Store {
         // RFC 3339 with the Z: SQLite's datetime() is UTC but says nothing,
         // and a reader on another clock takes it for local time.
         self.db.execute(
-            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived) \
-             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4) \
+            "INSERT INTO repos (name, commit_sha, indexed_at, pushed_at, archived, version) \
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4, NULLIF(?5, '')) \
              ON CONFLICT(name) DO UPDATE SET commit_sha = excluded.commit_sha, \
-             indexed_at = excluded.indexed_at, \
+             indexed_at = excluded.indexed_at, version = excluded.version, \
              files = NULL, source_bytes = NULL, disk_bytes = NULL, \
              pushed_at = COALESCE(NULLIF(excluded.pushed_at, ''), pushed_at), \
              archived = CASE WHEN excluded.pushed_at <> '' \
@@ -356,7 +359,8 @@ impl Store {
                 name,
                 upstream.commit_sha,
                 upstream.pushed_at,
-                upstream.archived as i64
+                upstream.archived as i64,
+                upstream.version
             ],
         )?;
         Ok(self.db.query_row(
@@ -894,7 +898,7 @@ impl Store {
                  SELECT language FROM documents \
                  WHERE repo_id = r.id AND offset >= 0 \
                  GROUP BY language ORDER BY SUM(raw_size) DESC LIMIT 1 \
-             ), '-') \
+             ), '-'), COALESCE(r.version, '') \
              FROM repos r ORDER BY r.name",
         )?;
         let rows = statement
@@ -909,6 +913,7 @@ impl Store {
                     pushed_at: row.get(6)?,
                     tags: row.get(7)?,
                     language: row.get(8)?,
+                    version: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
