@@ -38,9 +38,13 @@ pub fn render_matches_json(
         // twenty-odd tokens, and a permalink on every match was the largest
         // part of a typical answer.
         let mut commits = serde_json::Map::new();
+        let mut as_of = serde_json::Map::new();
         for item in shown {
             if let Some(sha) = item.commit() {
                 commits.entry(item.repo.clone()).or_insert(sha.into());
+            }
+            if let Some(date) = item.pushed_at.get(..10) {
+                as_of.entry(item.repo.clone()).or_insert(date.into());
             }
         }
         // Compact: indentation is tokens the reader pays for and never uses.
@@ -48,6 +52,8 @@ pub fn render_matches_json(
             "pattern": pattern,
             "count": items.len(),
             "commits": commits,
+            // When each repository's code is from, per repository like commits.
+            "as_of": as_of,
             // The text output says so in its header; without it here an agent
             // reading JSON cannot tell a complete answer from a capped one.
             "more_available": results.more_available,
@@ -210,6 +216,19 @@ fn clamp(line: &str) -> String {
 /// predate current practice in a field that moves quickly.
 const STALE_AFTER_DAYS: u64 = 365;
 
+/// "  (code as of DATE)" for a match's file header, with a warning when the
+/// project has had no commit for a year; empty when the date is unknown.
+fn as_of(item: &Match) -> String {
+    let Some(date) = item.pushed_at.get(..10) else {
+        return String::new();
+    };
+    if is_stale(&item.pushed_at) {
+        format!("  (code as of {date}; no commits since)")
+    } else {
+        format!("  (code as of {date})")
+    }
+}
+
 /// Whether an ISO date is older than the staleness threshold.
 fn is_stale(pushed_at: &str) -> bool {
     if pushed_at.len() < 10 {
@@ -289,7 +308,8 @@ pub fn render_compact(matches: &[Match], header: &str) -> String {
     for key in order {
         let mut items = grouped[&key].clone();
         items.sort_by_key(|item| item.line_number);
-        out.push_str(&format!("\n{} {} ({})\n", key.0, key.1, items.len()));
+        let date = items.first().map(|item| as_of(item)).unwrap_or_default();
+        out.push_str(&format!("\n{} {} ({}){date}\n", key.0, key.1, items.len()));
         for item in items {
             out.push_str(&format!(
                 "{}\t{}\n",
@@ -348,31 +368,15 @@ pub fn render_matches(matches: &[Match], header: &str) -> String {
         // them top to bottom is what makes the file's shape legible.
         let mut items = grouped[&key].clone();
         items.sort_by_key(|item| item.line_number);
-        // Flag stale sources inline. A pattern from a project that stopped
-        // moving years ago may well be out of date, and the reader cannot know
-        // that from the snippet alone.
-        let stale = items
-            .first()
-            .map(|item| is_stale(&item.pushed_at))
-            .unwrap_or(false);
+        // When the code is from, so the reader can weigh it against newer
+        // docs, and flag a project that stopped moving: the snippet alone
+        // cannot say either.
         // One line, not two: `Repo:` and `File:` on separate lines cost a
         // fifth of the output on a five-result page, and the reader needs the
         // pair together anyway to fetch the file. Separated by a space rather
         // than a slash, because `owner/name/a/b.rs` gives a reader no way to
         // tell where the repository ends and the path begins.
-        let date = if stale {
-            items
-                .first()
-                .map(|i| {
-                    format!(
-                        "  (last commit {})",
-                        &i.pushed_at[..10.min(i.pushed_at.len())]
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let date = items.first().map(|item| as_of(item)).unwrap_or_default();
         out.push_str(&format!("\n{} {}{date}\n", key.0, key.1));
         let mut previous_scope: Option<&str> = None;
         let mut previous_window = 0usize;

@@ -122,6 +122,9 @@ pub struct Store {
     pending: Vec<(i64, Vec<u8>)>,
     /// Bytes held in `pending`, to bound memory before the first flush.
     pending_bytes: usize,
+    /// Repositories whose files are all queued, with the commit to record
+    /// once those files are on disk.
+    finished: Vec<(i64, String)>,
     stop_trigrams: Option<Option<HashSet<[u8; 3]>>>,
 }
 
@@ -268,6 +271,7 @@ impl Store {
             dictless,
             pending: Vec::new(),
             pending_bytes: 0,
+            finished: Vec::new(),
             stop_trigrams: None,
         };
         // Only a writer may repair the corpus. A reader that did so could
@@ -327,6 +331,17 @@ impl Store {
     }
 
     // -- writing ------------------------------------------------------------
+
+    /// Record that upstream was checked and is still at the stored commit.
+    /// indexed_at is when we last looked, which is what staleness measures.
+    pub fn mark_checked(&mut self, name: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE repos SET indexed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+             WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+        )?;
+        Ok(())
+    }
 
     /// Register a repo, discarding any documents from a previous ingest.
     ///
@@ -413,7 +428,9 @@ impl Store {
         {
             self.train_dictionary()?;
         }
-        if self.dictionary.is_some() {
+        // Batched: flushing each file cost a compressor, a commit and an fsync
+        // apiece, 7.9s of storing 1,875 files. `finish_repo` flushes the rest.
+        if self.dictionary.is_some() && self.pending_bytes >= MAX_PENDING_BYTES {
             self.flush_pending()?;
         }
         Ok(doc_id)
@@ -451,8 +468,25 @@ impl Store {
     }
 
     /// Compress and append everything queued.
+    /// All of a repository's files are queued: record its commit once they
+    /// are on disk. Flushes now if a dictionary (or dictless mode) is settled;
+    /// before that, files wait so the dictionary trains on several repos.
+    pub fn finish_repo(&mut self, repo_id: i64, commit_sha: String) -> Result<()> {
+        self.finished.push((repo_id, commit_sha));
+        if self.dictionary.is_some() || self.dictless || self.pending.is_empty() {
+            self.flush_pending()?;
+        }
+        Ok(())
+    }
+
     pub fn flush_pending(&mut self) -> Result<()> {
         if self.pending.is_empty() {
+            for (repo_id, sha) in std::mem::take(&mut self.finished) {
+                self.db.execute(
+                    "UPDATE repos SET commit_sha = ?1 WHERE id = ?2",
+                    params![sha, repo_id],
+                )?;
+            }
             return Ok(());
         }
         if self.dictionary.is_none() && !self.dictless {
@@ -500,6 +534,13 @@ impl Store {
                 params![offset as i64, packed.len() as i64, doc_id],
             )?;
             offset += packed.len() as u64;
+        }
+        // Their files were all queued before this batch, so all are in it.
+        for (repo_id, sha) in std::mem::take(&mut self.finished) {
+            transaction.execute(
+                "UPDATE repos SET commit_sha = ?1 WHERE id = ?2",
+                params![sha, repo_id],
+            )?;
         }
         // The blob bytes must be on disk before the rows that point at them
         // are committed. SQLite fsyncs its own commit; without this the
@@ -1749,6 +1790,40 @@ mod tests {
 
     /// A repository with only a handful of files must still store and read
     /// back: zstd cannot train a dictionary from very few samples.
+    /// A commit recorded before its files reach disk would make `add` skip a
+    /// half-stored repository as up to date after an interrupted ingest.
+    #[test]
+    fn commit_is_recorded_once_files_are_on_disk() -> Result<()> {
+        let dir = crate::store::scratch_dir("finish");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::open_for_write(&dir)?;
+        let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        for index in 0..3u8 {
+            store.add_document(
+                repo,
+                &format!("x{index}.py"),
+                "python",
+                vec![b'a' + index; 64],
+            )?;
+        }
+        // No dictionary yet, so the files wait for more repositories.
+        store.finish_repo(repo, "sha1".into())?;
+        assert_eq!(store.list_repos()?[0].commit_sha, "");
+        drop(store);
+        // Interrupted: the reopened writer drops the unwritten files, and
+        // with them the repository, so the next add fetches it again.
+        let mut store = Store::open_for_write(&dir)?;
+        assert!(store.list_repos()?.is_empty());
+
+        let repo = store.add_repo("a/b", &crate::fetch::Upstream::default())?;
+        store.add_document(repo, "x.py", "python", b"print(1)\n".to_vec())?;
+        store.finish_repo(repo, "sha2".into())?;
+        store.flush_pending()?;
+        assert_eq!(store.list_repos()?[0].commit_sha, "sha2");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
     #[test]
     fn small_corpus_round_trips() -> Result<()> {
         let dir = crate::store::scratch_dir("corpustest");

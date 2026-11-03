@@ -33,8 +33,14 @@ pub fn trigrams(content: &[u8]) -> HashSet<[u8; 3]> {
 /// intersect entire lists, and decoding one measures at 0.2ms for 220,000 ids,
 /// so the block index would cost complexity and save nothing.
 fn encode(doc_ids: &[i64]) -> Result<Vec<u8>> {
+    encode_after(doc_ids, 0)
+}
+
+/// Encode ids as deltas from `previous`, so the frame can be appended to a
+/// stored list whose last id is `previous`: zstd frames concatenate, and
+/// `decode` reads every frame of a blob as one stream.
+fn encode_after(doc_ids: &[i64], mut previous: i64) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(doc_ids.len() * 2);
-    let mut previous = 0i64;
     for doc_id in doc_ids {
         let mut delta = (doc_id - previous) as u64;
         previous = *doc_id;
@@ -88,19 +94,41 @@ pub struct IndexStats {
 /// automatically once enough of the index is stale.
 pub fn build(store: &mut Store, progress: &mut dyn FnMut(usize, usize)) -> Result<IndexStats> {
     let indexed_upto = read_marker(store, "indexed_upto")?;
+    // Beyond 40% dead entries the index is mostly bookkeeping for documents
+    // that no longer exist, and rebuilding is cheaper than carrying them
+    // through every query.
+    let full = indexed_upto == 0 || rebuild_due(store)?;
+    build_from(store, if full { 0 } else { indexed_upto }, full, progress)
+}
+
+/// Index new documents without the automatic full rebuild `build` may run.
+///
+/// For `add`, which an agent runs mid-task to refresh a repository: a rebuild
+/// is minutes on a large corpus, while extending is seconds. Stale entries only
+/// cost query-time skips, so the rebuild waits for `update` or `index`.
+pub fn extend(store: &mut Store, progress: &mut dyn FnMut(usize, usize)) -> Result<IndexStats> {
+    let indexed_upto = read_marker(store, "indexed_upto")?;
+    build_from(store, indexed_upto, indexed_upto == 0, progress)
+}
+
+/// Incremental runs since the last rebuild after which `build` rebuilds:
+/// each appends a frame to the lists it touched, and many small frames
+/// compress and decode worse than one.
+const APPENDED_RUNS_BEFORE_REBUILD: i64 = 50;
+
+/// Whether `build` would rebuild: the share of dead entries is over 40%, or
+/// lists carry many appended frames.
+pub fn rebuild_due(store: &Store) -> Result<bool> {
+    if read_marker(store, "appended_runs")? >= APPENDED_RUNS_BEFORE_REBUILD {
+        return Ok(true);
+    }
     let stale = read_marker(store, "stale_postings")?;
     let live: i64 = store.db.query_row(
         "SELECT COUNT(*) FROM documents WHERE offset >= 0",
         [],
         |row| row.get(0),
     )?;
-
-    // Beyond this share of dead entries the index is mostly bookkeeping for
-    // documents that no longer exist, and rebuilding is cheaper than carrying
-    // them through every query.
-    let too_stale = live > 0 && stale * 100 / live.max(1) > 40;
-    let full = indexed_upto == 0 || too_stale;
-    build_from(store, if full { 0 } else { indexed_upto }, full, progress)
+    Ok(live > 0 && stale * 100 / live.max(1) > 40)
 }
 
 /// Discard the existing index and rebuild it from every stored document.
@@ -166,7 +194,8 @@ fn clear_index(store: &Store) -> Result<()> {
     transaction.execute("DELETE FROM postings", [])?;
     transaction.execute(
         "INSERT OR REPLACE INTO meta (key, value) \
-         VALUES ('indexed_upto', ?1), ('stale_postings', ?1), ('doc_count', ?1)",
+         VALUES ('indexed_upto', ?1), ('stale_postings', ?1), ('doc_count', ?1), \
+         ('appended_runs', ?1)",
         params![b"0".to_vec()],
     )?;
     transaction.commit()?;
@@ -182,6 +211,7 @@ fn build_from(
     // Read before the run overwrites doc_count, since the stale count compares
     // what was live at the last index against what still is.
     let stale_before = read_marker(store, "stale_postings")?;
+    let appended_before = read_marker(store, "appended_runs")?;
     if full {
         clear_index(store)?;
     }
@@ -236,7 +266,7 @@ fn build_from(
             buffered += 1;
         }
         if buffered >= FLUSH_THRESHOLD {
-            flush_batch(store, &mut postings, &mut stop, cutoff, *doc_id)?;
+            flush_batch(store, &mut postings, &mut stop, cutoff, *doc_id, !full)?;
             buffered = 0;
         }
         if count % 500 == 0 {
@@ -244,7 +274,14 @@ fn build_from(
         }
     }
     let highest_indexed = doc_ids.last().copied().unwrap_or(after);
-    flush_batch(store, &mut postings, &mut stop, cutoff, highest_indexed)?;
+    flush_batch(
+        store,
+        &mut postings,
+        &mut stop,
+        cutoff,
+        highest_indexed,
+        !full,
+    )?;
 
     // Every trigram seen that was not dropped is now stored, so this needs no
     // separate tally to drift out of step with what was written.
@@ -278,6 +315,15 @@ fn build_from(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('doc_count', ?1)",
         params![total.to_string().into_bytes()],
     )?;
+    let appended = if full {
+        0
+    } else {
+        appended_before + i64::from(!doc_ids.is_empty())
+    };
+    transaction.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('appended_runs', ?1)",
+        params![appended.to_string().into_bytes()],
+    )?;
     transaction.commit()?;
     // The listing reads this rather than deriving it, and an index run is the
     // natural point to refresh it: the documents have just been read anyway.
@@ -305,6 +351,7 @@ fn flush_batch(
     stop: &mut std::collections::HashSet<[u8; 3]>,
     cutoff: usize,
     indexed_upto: i64,
+    append: bool,
 ) -> Result<()> {
     let transaction = store.db.unchecked_transaction()?;
     {
@@ -320,12 +367,35 @@ fn flush_batch(
             }
             // Merge rather than replace, so documents indexed by an earlier
             // batch or an earlier run keep their entry.
-            let mut merged = existing
+            let stored_blob = existing
                 .query_row(params![gram.as_slice()], |row| row.get::<_, Vec<u8>>(0))
-                .ok()
-                .map(|blob| decode(&blob))
+                .ok();
+            let mut merged = stored_blob
+                .as_deref()
+                .map(decode)
                 .transpose()?
                 .unwrap_or_default();
+            // New ids all above the stored ones (every incremental run, since
+            // ids only grow) go on as one more frame. Recompressing the whole
+            // list was 15s of a 20s `add`; a full rebuild repacks the frames.
+            if append
+                && let (Some(mut blob), Some(&last)) = (stored_blob, merged.last())
+                && ids.first().is_some_and(|&first| first > last)
+                && ids.windows(2).all(|pair| pair[0] < pair[1])
+            {
+                let count = merged.len() + ids.len();
+                if count > cutoff {
+                    stop.insert(*gram);
+                    transaction.execute(
+                        "DELETE FROM postings WHERE trigram = ?1",
+                        params![gram.as_slice()],
+                    )?;
+                    continue;
+                }
+                blob.extend_from_slice(&encode_after(ids, last)?);
+                insert.execute(params![gram.as_slice(), blob, count as i64])?;
+                continue;
+            }
             // Skipping the sort when a batch's ids are all higher than the
             // stored ones, which is the common case, was measured at 182s
             // against 184s: the cost is re-encoding the lists, not ordering
@@ -513,6 +583,73 @@ mod tests {
             crate::search::search(&mut store, "retry_count", &crate::search::Query::new(100))?;
         assert_eq!(hits.matches.len(), 20);
 
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// An appended frame continues the deltas of the list before it.
+    #[test]
+    fn appended_frames_decode_as_one_list() -> Result<()> {
+        let mut blob = encode(&[3, 90, 70_000])?;
+        blob.extend_from_slice(&encode_after(&[70_001, 5_000_000], 70_000)?);
+        blob.extend_from_slice(&encode_after(&[5_000_200], 5_000_000)?);
+        assert_eq!(
+            decode(&blob)?,
+            vec![3, 90, 70_000, 70_001, 5_000_000, 5_000_200]
+        );
+        Ok(())
+    }
+
+    /// Incremental runs append to stored lists, and a rebuild repacks them
+    /// into one frame, without changing what any list holds.
+    #[test]
+    fn appended_lists_hold_what_a_rebuild_writes() -> Result<()> {
+        let dir = crate::store::scratch_dir("append");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = crate::store::Store::open_for_write(&dir)?;
+        let mut noop = |_: usize, _: usize| {};
+        for (round, repo) in ["a/one", "b/two", "c/three"].iter().enumerate() {
+            let id = store.add_repo(repo, &crate::fetch::Upstream::default())?;
+            for i in 0..12 {
+                // One file per round shares a word, so its list spans three
+                // runs while staying under the too-common cutoff.
+                let call = if i == 0 { "backoff" } else { "wait" };
+                let body = format!("fn retry_{round}_{i}() {{ {call}({i}); }}\n");
+                store.add_document(id, &format!("f{i}.rs"), "rust", body.into_bytes())?;
+            }
+            store.flush_pending()?;
+            super::extend(&mut store, &mut noop)?;
+        }
+        type List = (Vec<u8>, Vec<i64>, i64);
+        let lists = |store: &crate::store::Store| -> Result<Vec<List>> {
+            let mut statement = store
+                .db
+                .prepare("SELECT trigram, doc_ids, doc_count FROM postings ORDER BY trigram")?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get::<_, Vec<u8>>(1)?, row.get(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(|(gram, blob, count)| Ok((gram, decode(&blob)?, count)))
+                .collect()
+        };
+        // The first run builds an empty index from scratch; the others append.
+        assert_eq!(read_marker(&store, "appended_runs")?, 2);
+        let appended = lists(&store)?;
+        let back = appended.iter().find(|(gram, ..)| gram.as_slice() == b"bac");
+        assert_eq!(
+            back.map(|(_, ids, count)| (ids.len(), *count)),
+            Some((3, 3))
+        );
+        super::rebuild(&mut store, &mut noop)?;
+        assert_eq!(read_marker(&store, "appended_runs")?, 0);
+        // A rebuild may keep trigrams the smaller incremental runs dropped as
+        // too common, so compare the lists the appended index holds.
+        let rebuilt = lists(&store)?;
+        for list in &appended {
+            assert!(rebuilt.contains(list), "appended list differs: {list:?}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

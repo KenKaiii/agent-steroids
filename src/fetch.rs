@@ -347,7 +347,7 @@ fn get_within(
 }
 
 /// What the corpus records about a repository's upstream state.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Upstream {
     pub branch: String,
     /// Identifies this exact snapshot. Sourced from the archive ETag, which is
@@ -750,11 +750,16 @@ fn canonical_repo(stored: &str, archive_root: &str) -> String {
 
 /// Write a prepared repository into the store.
 pub fn commit(prepared: &PreparedRepo, store: &mut Store) -> Result<()> {
-    let repo_id = store.add_repo(&prepared.repo, &prepared.upstream)?;
+    // The commit is recorded only once every file is on disk: `add` skips a
+    // repository already at the upstream commit, so one recorded before an
+    // interrupted ingest would leave it half-stored for good.
+    let mut upstream = prepared.upstream.clone();
+    let commit_sha = std::mem::take(&mut upstream.commit_sha);
+    let repo_id = store.add_repo(&prepared.repo, &upstream)?;
     for (path, language, content) in &prepared.files {
         store.add_document(repo_id, path, language, content.clone())?;
     }
-    Ok(())
+    store.finish_repo(repo_id, commit_sha)
 }
 
 #[cfg(test)]

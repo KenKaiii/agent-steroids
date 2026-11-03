@@ -388,10 +388,9 @@ pub fn is_test_path(path: &str) -> bool {
 /// outline or folder listing stops here.
 pub const READ_CAP_CHARS: usize = 6_000;
 
-/// Most characters a read the caller asked for explicitly (a range, `full`,
-/// definitions by name) returns before it is cut. Measured in races, a model
-/// round trip costs more than 4,000 tokens read once: cutting at 6,000 sent
-/// agents back for the rest of a file they had already decided to read.
+/// Most characters definitions asked for by name return before they are cut.
+/// A range or `full` stops at [`READ_CAP_CHARS`] instead: at 16,000, agents
+/// used them to read whole files past the outline, the largest cost in races.
 pub const EXPLICIT_CAP_CHARS: usize = 16_000;
 
 /// How `show` words its next steps. Plain names, not flag syntax: an agent
@@ -416,6 +415,8 @@ pub struct ShowRequest<'a> {
     /// Add the same-repo helpers the shown code calls.
     pub uses: bool,
     pub json: bool,
+    /// Date of the indexed snapshot's last commit, empty when unknown.
+    pub as_of: &'a str,
 }
 
 /// Looks up the helpers shown lines use; a hook so tests need no corpus.
@@ -481,9 +482,9 @@ fn within_chars(
 /// `show`'s answer for one file, text or JSON.
 ///
 /// A plain read of a file over [`READ_CAP_CHARS`] becomes its outline. A
-/// range, `full` or a set of bodies is the code asked for, up to
-/// [`EXPLICIT_CAP_CHARS`] (or a smaller token budget), then cut where a line
-/// ends with the call that continues it. Turning ranges and `full` into
+/// range or `full` is the code asked for up to [`READ_CAP_CHARS`], a set of
+/// bodies up to [`EXPLICIT_CAP_CHARS`] (or a smaller token budget), then cut
+/// where a line ends with the call that continues it. Turning ranges and `full` into
 /// outlines too taught agents to ask for `full` on every read.
 pub fn render_show(
     lines: &[&str],
@@ -500,11 +501,14 @@ pub fn render_show(
     };
     let cap = budget(EXPLICIT_CAP_CHARS);
     let outline_cap = budget(READ_CAP_CHARS);
+    let range_cap = budget(READ_CAP_CHARS);
     let mut notes: Vec<String> = Vec::new();
     // Contiguous runs of lines to print, 1-based and inclusive.
     let mut blocks: Vec<(usize, usize)> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
     let mut outlined = false;
+    // Every line of the file was printed, nothing cut.
+    let mut whole_file = false;
     let mut next_step: Option<String> = None;
     let (start, end) = request.range;
     let hidden = if request.no_comments {
@@ -645,13 +649,14 @@ pub fn render_show(
         } else {
             // A range, `full`, or a long file that declares nothing: the
             // lines asked for, up to the cap, and where to continue.
-            let (kept, next) = within_chars(lines, &range, cap);
+            let (kept, next) = within_chars(lines, &range, range_cap);
+            whole_file = start == 1 && end >= total && next.is_none();
             blocks = kept;
             let shown_end = blocks.last().map_or(end, |block| block.1);
             notes.push(format!("lines {start}-{shown_end} of {total}"));
             if let Some(next) = next {
                 notes.push(format!(
-                    "stopped at {cap} characters; continue with from={next}"
+                    "stopped at {range_cap} characters; continue with from={next}"
                 ));
             } else if !request.ranged && end < total {
                 notes.push(format!("continue with from={}", end + 1));
@@ -662,8 +667,11 @@ pub fn render_show(
         }
     }
 
-    // Code was shown: add what it calls, so the next hop is not a call.
-    let uses = if request.uses && !outlined && !blocks.is_empty() {
+    // Code was shown: add what it calls, so the next hop is not a call. Not
+    // after a whole file: an agent reading files whole reads the ones it
+    // needs next, and in a race the helpers it was handed (19k of 135k
+    // characters) were largely read again.
+    let uses = if request.uses && !outlined && !whole_file && !blocks.is_empty() {
         lookup(
             &blocks,
             crate::deps::uses_cap(printed_chars(lines, &blocks)),
@@ -689,12 +697,19 @@ pub fn render_show(
             "notes": notes,
             "next": next_step,
             "uses": uses.to_json(),
+            "as_of": (!request.as_of.is_empty()).then_some(request.as_of),
         })
         .to_string());
     }
 
+    // When the code is from, so an agent can weigh it against newer docs
+    // and decide itself whether a refresh is worth the wait.
+    let as_of = match request.as_of.get(..10) {
+        Some(date) => format!(" (code as of {date})"),
+        None => String::new(),
+    };
     let mut out = format!(
-        "# {}/{}\n# {}\n",
+        "# {}/{}{as_of}\n# {}\n",
         request.repo,
         request.path,
         notes.join("; ")
@@ -1103,6 +1118,60 @@ export default {
         assert!(!hidden.contains(&5) && !hidden.contains(&10));
     }
 
+    /// A read of the whole file asks for no helpers; a range of it does.
+    #[test]
+    fn whole_file_reads_skip_uses() {
+        let lines = lines();
+        let mut asked = Vec::new();
+        let mut run = |range: (usize, usize), ranged: bool| {
+            let read = ShowRequest {
+                range,
+                ranged,
+                full: true,
+                uses: true,
+                ..request(&[])
+            };
+            render_show(&lines, &read, &mut |shown, _| {
+                asked.push(shown.to_vec());
+                crate::deps::Uses::default()
+            })
+            .unwrap();
+        };
+        run((1, lines.len()), false);
+        run((1, lines.len()), true);
+        run((2, 10), true);
+        assert_eq!(asked.len(), 1, "only the partial read looks up helpers");
+        assert_eq!(asked[0].first().map(|block| block.0), Some(2));
+    }
+
+    #[test]
+    fn reads_say_when_their_code_is_from() {
+        let lines = lines();
+        let dated = ShowRequest {
+            as_of: "2026-10-06T22:20:57Z",
+            ..request(&[])
+        };
+        let out = render_show_noop(&lines, &dated).unwrap();
+        assert!(
+            out.starts_with("# axios/axios/lib/utils.js (code as of 2026-10-06)\n"),
+            "{out}"
+        );
+        let json = render_show_noop(
+            &lines,
+            &ShowRequest {
+                json: true,
+                ..dated
+            },
+        )
+        .unwrap();
+        assert!(json.contains(r#""as_of":"2026-10-06T22:20:57Z""#), "{json}");
+        let undated = render_show_noop(&lines, &request(&[])).unwrap();
+        assert!(
+            undated.starts_with("# axios/axios/lib/utils.js\n"),
+            "{undated}"
+        );
+    }
+
     fn render_show_noop(lines: &[&str], request: &ShowRequest) -> anyhow::Result<String> {
         render_show(lines, request, &mut |_, _| crate::deps::Uses::default())
     }
@@ -1120,6 +1189,7 @@ export default {
             max_tokens: None,
             uses: false,
             json: false,
+            as_of: "",
         }
     }
 
@@ -1281,7 +1351,7 @@ export default {
                 read.contains("\t    assert.strictEqual"),
                 "an outline instead of code: {read}"
             );
-            assert!(read.len() < EXPLICIT_CAP_CHARS + 400, "{}", read.len());
+            assert!(read.len() < READ_CAP_CHARS + 400, "{}", read.len());
             assert!(read.contains("continue with from="), "{read}");
             assert!(!read.contains("# next:"), "{read}");
         }

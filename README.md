@@ -106,9 +106,10 @@ It reads the docs, installs itself, works out what your project needs, and fills
 **Last step.** Paste this into your agent's permanent instructions (`CLAUDE.md`, `.cursorrules`, wherever yours live) so it keeps using it:
 
 ```
-I have a local corpus of real open source code at ~/.steroids. Search it
-before writing anything non-trivial, to see how other projects solved the
-same problem.
+I have a local corpus of current open source code at ~/.steroids. Use it
+when the answer may be newer than your training, or when you don't know
+which projects do this. Skip it when you already know the answer: it is
+not a default research step. Results say when their code is from.
 
 If your agent has a built-in `steroids` tool (GG Coder does; load it with
 tool_search if it isn't listed), use it instead of the CLI below: several
@@ -122,8 +123,8 @@ calls in one reply run in parallel. Otherwise run the CLI.
   steroids show <repo> <dir>     outline of every file in a folder
   steroids show <repo> <file>    a file, or its outline if over 6,000 characters
   steroids show <repo> <file> --symbols a,b      just those definitions' bodies
-  steroids show <repo> <file> --from N --to M    a range (--no-comments drops comments;
-                                 --full reads a long file instead of its outline)
+  steroids show <repo> <file> --from N --to M    a range, 6,000 characters a read
+                                 (--no-comments drops comments)
   steroids changes <repo> [--version X]          a release's contents; --pattern
                                  'form|param' for the items that matter, whole
   steroids files <repo> [--path dir]   indexed files by directory (a big repo:
@@ -134,8 +135,8 @@ calls in one reply run in parallel. Otherwise run the CLI.
 Read the least that answers the question, in this order: `show <dir>` or a
 file's outline to find where things are, then `--symbols` (or `define a,b
 --repo X`) for the bodies, `--from/--to` only for code that is not a
-definition. A read of code ends with "uses": the same-repo helpers that code
-calls, so you don't have to look them up one by one. Put all the reads you
+definition. A read of part of a file ends with "uses": the same-repo helpers
+that code calls, so you don't have to look them up one by one. Put all the reads you
 need in one reply. Never loop `show` over whole files.
 
 Repository names and languages are case-insensitive; any form `add` takes
@@ -174,7 +175,7 @@ Takes about 25 minutes. Too much? The file is grouped by category with comments,
 | Command | What it gets you |
 |---|---|
 | `steroids` | The full interface. Browse repos, search as you type |
-| `steroids add <repo>` | Add a repo. Pasting a GitHub URL works too |
+| `steroids add <repo>` | Add a repo, or refresh one already added (skipped when upstream hasn't moved). Pasting a GitHub URL works too |
 | `steroids index` | Runs by itself after every add, update and remove. `--rebuild` starts the index over |
 | `steroids discover 'topic:ai-agents'` | Finds good repos for you. Add `--add` to take them |
 | `steroids search '<regex>'` | What your agent calls. Results spread across projects |

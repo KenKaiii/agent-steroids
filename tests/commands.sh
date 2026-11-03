@@ -159,9 +159,12 @@ ok "show --outline"            0 "outline of 278 lines" -- "$BIN" show antirez/s
 ok "show --outline of a range" 0 "outline of lines 1-60" -- "$BIN" show antirez/smallchat smallchat-server.c --outline --from 1 --to 60
 ok "show --outline --json"     0 '"blocks"'      -- "$BIN" show antirez/smallchat smallchat-server.c --outline --json
 ok "show --no-comments"        0 "comment lines hidden" -- "$BIN" show antirez/smallchat smallchat-server.c --no-comments
-ok "show range reads the code" 0 "lines 1-278 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278
-ok "show --full reads the code" 0 "lines 1-278 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c --full
+ok "show range stops at 6,000 chars" 0 "stopped at 6000 characters; continue with from=" -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278
+ok "show --full stops at 6,000 chars" 0 "stopped at 6000 characters; continue with from=" -- "$BIN" show antirez/smallchat smallchat-server.c --full
 ok "show range past the budget is cut" 0 "continue with from=" -- "$BIN" show antirez/smallchat smallchat-server.c --from 1 --to 278 --max-tokens 500
+ok "show range reads the code" 0 "lines 100-140 of 278" -- "$BIN" show antirez/smallchat smallchat-server.c --from 100 --to 140
+ok "show says when its code is from" 0 "(code as of " -- "$BIN" show antirez/smallchat chatlib.h
+ok "search says when its code is from" 0 "(code as of " -- "$BIN" search -F "accept(" --repo antirez/smallchat
 ok "show adds what the code uses" 0 "# uses:"     -- "$BIN" show antirez/smallchat smallchat-server.c --symbols main
 ok "show --no-uses leaves it out" 0 "lines 1-"    -- "$BIN" show antirez/smallchat chatlib.h --no-uses
 ok "define --repo prints body" 0 "int fd"        -- "$BIN" define client --repo antirez/smallchat
@@ -247,13 +250,17 @@ rm -rf "$FAKEHOME"
 echo
 echo "=== idempotence: repeating a command must be safe ==="
 ok "re-add same repo"      0 "files kept" -- "$BIN" add antirez/smallchat
-ok "add duplicate names"   0 "files kept" -- "$BIN" add antirez/smallchat antirez/smallchat
+# Upstream has not moved, so each spelling resolves to the stored copy and
+# is checked once, not downloaded again.
+ok "add duplicate names"   0 "1 already up to date" -- "$BIN" add antirez/smallchat antirez/smallchat
 ok "index twice"           0 "documents"  -- "$BIN" index
 ok "compact twice"         0 "reclaimed"  -- "$BIN" compact
-ok "url form of same repo" 0 "files kept" -- "$BIN" add "https://github.com/antirez/smallchat.git"
+ok "url form of same repo" 0 "1 already up to date" -- "$BIN" add "https://github.com/antirez/smallchat.git"
 ok "still one repository"  0 "1 repositories" -- "$BIN" repos
-ok "case variant of same repo" 0 "files kept" -- "$BIN" add ANTIREZ/SMALLCHAT
+ok "case variant of same repo" 0 "1 already up to date" -- "$BIN" add ANTIREZ/SMALLCHAT
 ok "still one after case variant" 0 "1 repositories" -- "$BIN" repos
+# The stored copy may lack tests, so this must download.
+ok "include-tests re-downloads" 0 "files kept" -- "$BIN" add --include-tests antirez/smallchat
 # The spelling already stored wins over the one just typed: tags and scripts
 # refer to it. (`ok` compares case-insensitively, so check by hand.)
 if "$BIN" repos | grep -q "antirez/smallchat"; then

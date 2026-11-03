@@ -103,6 +103,13 @@ pub fn ingest_all(
         .collect();
     let total = names.len();
     let names = &names;
+    // Keyed the way the store matches names, so `kong/kong` or a pasted URL
+    // finds the commit held for `Kong/kong`.
+    let known: std::collections::HashMap<String, &str> = known
+        .iter()
+        .map(|(name, sha)| (name.to_lowercase(), sha.as_str()))
+        .collect();
+    let known = &known;
 
     let parallel = parallel.clamp(1, 32).min(total);
     let cursor = AtomicUsize::new(0);
@@ -124,7 +131,10 @@ pub fn ingest_all(
                     let Some(name) = names.get(index) else {
                         return;
                     };
-                    let known_sha = known.get(name).map(String::as_str).unwrap_or("");
+                    let key = fetch::normalize_repo(name)
+                        .unwrap_or_else(|_| name.clone())
+                        .to_lowercase();
+                    let known_sha = known.get(&key).copied().unwrap_or("");
                     let prepared = fetch::prepare_if_changed(name, include_tests, known_sha)
                         .map_err(|error| error.to_string());
                     // A closed receiver means the writer is gone; stop early.
@@ -154,6 +164,10 @@ pub fn ingest_all(
                 // Already at the upstream commit; nothing was downloaded.
                 Ok(Err(fetch::Skipped::Unchanged)) => {
                     outcome.unchanged += 1;
+                    // Checked just now, so the listing must not call it stale.
+                    if let Ok(repo) = fetch::normalize_repo(&name) {
+                        store.mark_checked(&repo)?;
+                    }
                     report(&name, Err("unchanged"), done, total);
                 }
                 Ok(Ok(repo)) => {

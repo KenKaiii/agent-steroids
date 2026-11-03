@@ -385,6 +385,15 @@ fn truncate(text: &str, width: usize) -> String {
         + "\u{2026}"
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum IndexMode {
+    /// Extend, and rebuild once the index is mostly stale.
+    Auto,
+    /// Extend only: `add` runs mid-task, and a rebuild is minutes.
+    Extend,
+    Rebuild,
+}
+
 /// Bring the trigram index up to date, reporting on stderr.
 ///
 /// Every command that changes the corpus ends here rather than printing
@@ -394,11 +403,11 @@ fn truncate(text: &str, width: usize) -> String {
 /// the code was sitting there unindexed. An incremental run is near instant
 /// for one repository and a couple of minutes after a full starter ingest,
 /// and either is cheaper than a wrong answer.
-fn run_index(store: &mut Store, rebuild: bool) -> Result<()> {
-    let builder = if rebuild {
-        index::rebuild
-    } else {
-        index::build
+fn run_index(store: &mut Store, mode: IndexMode) -> Result<()> {
+    let builder = match mode {
+        IndexMode::Auto => index::build,
+        IndexMode::Extend => index::extend,
+        IndexMode::Rebuild => index::rebuild,
     };
     // Carriage-return progress is for a terminal. Captured by an agent or a
     // log it is hundreds of lines saying nothing.
@@ -419,6 +428,11 @@ fn run_index(store: &mut Store, rebuild: bool) -> Result<()> {
         stats.trigrams_stored,
         stats.trigrams_seen - stats.trigrams_stored
     );
+    if mode == IndexMode::Extend && index::rebuild_due(store)? {
+        eprintln!(
+            "  note: the index is over 40% replaced files; `steroids update` or `steroids index` repacks it (minutes, not needed now)"
+        );
+    }
     Ok(())
 }
 
@@ -718,15 +732,19 @@ fn run(cli: Cli) -> Result<()> {
                 eprintln!("No repositories given. Pass names or --from-file.");
                 std::process::exit(2);
             }
-            let failures = ingest_all(
-                &mut store,
-                &names,
-                include_tests,
-                parallel,
-                &Default::default(),
-            )?
-            .failed
-            .len();
+            // Re-adding a repository upstream has not moved skips the
+            // download. Not with --include-tests: the stored copy may lack them.
+            let known: std::collections::HashMap<String, String> = if include_tests {
+                Default::default()
+            } else {
+                store
+                    .list_repos()?
+                    .into_iter()
+                    .map(|s| (s.name, s.commit_sha))
+                    .collect()
+            };
+            let outcome = ingest_all(&mut store, &names, include_tests, parallel, &known)?;
+            let failures = outcome.failed.len();
             // Label whatever landed, so a partly failed batch is still tagged.
             if !tag.is_empty() {
                 for name in &names {
@@ -740,7 +758,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             // The repositories that did land are indexed even when others
             // failed, or a partial batch would leave what worked unsearchable.
-            run_index(&mut store, false)?;
+            run_index(&mut store, IndexMode::Extend)?;
             if failures > 0 {
                 std::process::exit(1);
             }
@@ -806,7 +824,7 @@ fn run(cli: Cli) -> Result<()> {
             if reclaimed > 0 {
                 eprintln!("  reclaimed {}", human(reclaimed as f64));
             }
-            run_index(&mut store, false)?;
+            run_index(&mut store, IndexMode::Auto)?;
 
             // Last, so this process finishes on the binary it started with.
             // A failed upgrade is reported, not fatal: the corpus is fresh.
@@ -839,7 +857,14 @@ fn run(cli: Cli) -> Result<()> {
                     );
                 }
             }
-            run_index(&mut store, rebuild)?
+            run_index(
+                &mut store,
+                if rebuild {
+                    IndexMode::Rebuild
+                } else {
+                    IndexMode::Auto
+                },
+            )?
         }
 
         Command::Search {
@@ -1259,6 +1284,14 @@ fn run(cli: Cli) -> Result<()> {
                     Some((file.to_string(), line.parse().ok()?))
                 })
                 .collect();
+            let as_of: String = store
+                .db
+                .query_row(
+                    "SELECT COALESCE(pushed_at, '') FROM repos WHERE name = ?1",
+                    [&repo],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
             let mut lookup = |shown: &[(usize, usize)], cap: usize| {
                 deps::uses(&path, &text, shown, &skip, cap, &mut |candidate| {
                     store
@@ -1297,6 +1330,7 @@ fn run(cli: Cli) -> Result<()> {
                         max_tokens,
                         uses: !no_uses,
                         json,
+                        as_of: &as_of,
                     },
                     &mut lookup,
                 )?
@@ -1486,7 +1520,7 @@ fn run(cli: Cli) -> Result<()> {
             let repo = resolve_repo(&store, &repo)?;
             if store.remove_repo(&repo)? {
                 println!("  removed {repo}");
-                run_index(&mut store, false)?;
+                run_index(&mut store, IndexMode::Auto)?;
             } else {
                 println!("  not in corpus: {repo}");
                 std::process::exit(1);
@@ -1584,7 +1618,7 @@ fn run(cli: Cli) -> Result<()> {
                     }
                     eprintln!("  tagged: {}", tag.join(", "));
                 }
-                run_index(&mut store, false)?;
+                run_index(&mut store, IndexMode::Extend)?;
                 if failures == names.len() {
                     std::process::exit(1);
                 }
@@ -1650,7 +1684,7 @@ fn run(cli: Cli) -> Result<()> {
                 stale.len(),
                 human(reclaimed as f64)
             );
-            run_index(&mut store, false)?;
+            run_index(&mut store, IndexMode::Auto)?;
         }
 
         Command::Config { key, value } => {
