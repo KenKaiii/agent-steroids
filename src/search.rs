@@ -34,7 +34,11 @@ const FRAGMENT_CONFIRM_LIMIT: usize = 40;
 /// reader comparing how several projects solved the same problem needs to see
 /// the shape of each implementation, not a fragment. Matches what the hosted
 /// code search tools settled on.
-pub const DEFAULT_CONTEXT_LINES: usize = 5;
+pub const DEFAULT_CONTEXT_LINES: usize = 2;
+
+/// Past this many matches, a search with no context asked for lists one line
+/// per match: forty matches with context were the largest reads agents made.
+pub const COMPACT_ABOVE_MATCHES: usize = 10;
 
 /// A hit inside a comment or docstring is prose about code, not an
 /// implementation to learn from. Cheap prefix check, no parser.
@@ -71,6 +75,13 @@ pub struct Match {
 }
 
 impl Match {
+    /// The matched line itself.
+    pub fn matched_line(&self) -> &str {
+        self.context
+            .get(self.line_number.saturating_sub(self.context_first_line))
+            .map_or("", String::as_str)
+    }
+
     /// Line number of the first line of `context`.
     pub fn context_start(&self) -> usize {
         self.context_first_line

@@ -115,14 +115,15 @@ tool_search if it isn't listed), use it instead of the CLI below: several
 calls in one reply run in parallel. Otherwise run the CLI.
 
   steroids search '<regex>' [--tag T] [--repo a/b,c/d] [--language L] [--path src] [--limit N]
-  steroids search -F '$HOME'     literal text instead of a regex
+  steroids search -F '$HOME'     literal text instead of a regex; past 10 matches,
+                                 one line each (-C N for code around them)
   steroids define <a,b,c> [--repo a/b] [--path P]   where each is defined; with
                                  --repo or --path, each whole body (no file needed)
   steroids show <repo> <dir>     outline of every file in a folder
   steroids show <repo> <file>    a file, or its outline if over 6,000 characters
   steroids show <repo> <file> --symbols a,b      just those definitions' bodies
-  steroids show <repo> <file> --from N --to M    a range; outlined too if over 6,000
-                                 characters (--no-comments drops comments)
+  steroids show <repo> <file> --from N --to M    a range (--no-comments drops comments;
+                                 --full reads a long file instead of its outline)
   steroids changes <repo> [--version X]          a release's contents; --pattern
                                  'form|param' for the items that matter, whole
   steroids files <repo> [--path dir]   indexed files by directory (a big repo:
@@ -131,10 +132,11 @@ calls in one reply run in parallel. Otherwise run the CLI.
   steroids recent --tag X        what changed upstream in the last 72 hours
 
 Read the least that answers the question, in this order: `show <dir>` or a
-file's outline to find where things are, then `define a,b --repo X` or
-`--symbols` for the bodies, `--from/--to` for anything else. Never loop
-`show` over whole files, and don't raise --max-tokens to read more: narrow
-the read instead. `--full` is for the rare file you need entire.
+file's outline to find where things are, then `--symbols` (or `define a,b
+--repo X`) for the bodies, `--from/--to` only for code that is not a
+definition. A read of code ends with "uses": the same-repo helpers that code
+calls, so you don't have to look them up one by one. Put all the reads you
+need in one reply. Never loop `show` over whole files.
 
 Repository names and languages are case-insensitive; any form `add` takes
 (URL, owner/name) works for --repo. A --path without glob characters is a
@@ -142,8 +144,8 @@ prefix: `src` means `src/**`.
 
 Add --json to search, define, show, changes, files, repos or discover for structured
 output; a failure with --json is `{"error": "..."}` on stdout, exit 1.
-Search stops at --max-tokens (default 1500), define at 6000; show and changes
-take it only as a lower ceiling. Text says "N of M shown", JSON reports the cut as
+Search and define stop at --max-tokens (default 1500, about 6,000 characters)
+and name what they left out; show and changes take it only as a lower ceiling. Text says "N of M shown", JSON reports the cut as
 `omitted`, separate from `more_available`.
 
 If a search says the topic is not covered, that is a gap in my corpus, not a

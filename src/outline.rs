@@ -384,15 +384,20 @@ pub fn is_test_path(path: &str) -> bool {
     lowered.contains("test") || lowered.contains("spec")
 }
 
-/// Most characters a read returns unless all of it was asked for. Every
-/// character an agent reads is paid for again on each later turn; past this,
-/// the outline plus a targeted read costs less than the read.
+/// A plain read of a file longer than this prints its outline, and an
+/// outline or folder listing stops here.
 pub const READ_CAP_CHARS: usize = 6_000;
+
+/// Most characters a read the caller asked for explicitly (a range, `full`,
+/// definitions by name) returns before it is cut. Measured in races, a model
+/// round trip costs more than 4,000 tokens read once: cutting at 6,000 sent
+/// agents back for the rest of a file they had already decided to read.
+pub const EXPLICIT_CAP_CHARS: usize = 16_000;
 
 /// How `show` words its next steps. Plain names, not flag syntax: an agent
 /// calling a built-in tool knows these as parameters, a shell user as flags.
 const HOW_TO_READ: &str =
-    "ask for definitions by name (symbols), a smaller line range (from/to), or all of it (full)";
+    "read bodies by name (symbols), or code that is not a definition by line range (from/to)";
 
 /// What `show` was asked for, after the range defaults are resolved.
 pub struct ShowRequest<'a> {
@@ -408,8 +413,13 @@ pub struct ShowRequest<'a> {
     pub full: bool,
     pub no_comments: bool,
     pub max_tokens: Option<usize>,
+    /// Add the same-repo helpers the shown code calls.
+    pub uses: bool,
     pub json: bool,
 }
+
+/// Looks up the helpers shown lines use; a hook so tests need no corpus.
+pub type UsesLookup<'a> = dyn FnMut(&[(usize, usize)]) -> crate::deps::Uses + 'a;
 
 /// `lines[start..=end]` without comment lines or blank ones, as runs.
 fn without_comments(
@@ -468,30 +478,57 @@ fn within_chars(
 }
 
 /// `show`'s answer for one file, text or JSON.
-pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<String> {
+///
+/// A plain read of a file over [`READ_CAP_CHARS`] becomes its outline. A
+/// range, `full` or a set of bodies is the code asked for, up to
+/// [`EXPLICIT_CAP_CHARS`] (or a smaller token budget), then cut where a line
+/// ends with the call that continues it. Turning ranges and `full` into
+/// outlines too taught agents to ask for `full` on every read.
+pub fn render_show(
+    lines: &[&str],
+    request: &ShowRequest,
+    lookup: &mut UsesLookup,
+) -> anyhow::Result<String> {
     let language = crate::filters::language_of(request.path).unwrap_or("");
     let test_file = is_test_path(request.path);
     let total = lines.len();
+    let budget = |ceiling: usize| {
+        request
+            .max_tokens
+            .map_or(ceiling, |tokens| ceiling.min(tokens.saturating_mul(4)))
+    };
+    let cap = budget(EXPLICIT_CAP_CHARS);
+    let outline_cap = budget(READ_CAP_CHARS);
     let mut notes: Vec<String> = Vec::new();
     // Contiguous runs of lines to print, 1-based and inclusive.
     let mut blocks: Vec<(usize, usize)> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
     let mut outlined = false;
+    let mut next_step: Option<String> = None;
     let (start, end) = request.range;
     let hidden = if request.no_comments {
         comment_lines(lines, language)
     } else {
         HashSet::new()
     };
+    let strip = |range: Vec<(usize, usize)>| {
+        if request.no_comments {
+            without_comments(lines, range, &hidden)
+        } else {
+            (range, 0)
+        }
+    };
 
     if !request.symbols.is_empty() {
         let mut found = Vec::new();
+        let mut bodies: Vec<(usize, usize, &str)> = Vec::new();
         for symbol in request.symbols {
-            let bodies = definitions(lines, symbol.trim(), language);
-            if bodies.is_empty() {
-                missing.push(symbol.trim());
+            let symbol = symbol.trim();
+            let defined = definitions(lines, symbol, language);
+            if defined.is_empty() {
+                missing.push(symbol);
             }
-            for body in bodies {
+            for body in defined {
                 let last = body.end.min(body.start + MAX_BODY_LINES - 1);
                 if last < body.end {
                     notes.push(format!(
@@ -500,10 +537,10 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
                     ));
                 }
                 found.push(format!("{symbol} {}-{}", body.start, body.end));
-                blocks.push((body.start, last));
+                bodies.push((body.start, last, symbol));
             }
         }
-        if blocks.is_empty() {
+        if bodies.is_empty() {
             anyhow::bail!(
                 "no definition of {} in {}/{}; its outline lists what it defines",
                 missing.join(", "),
@@ -511,85 +548,112 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
                 request.path
             );
         }
-        blocks.sort_unstable();
-        blocks.dedup();
+        bodies.sort_unstable();
+        bodies.dedup_by_key(|body| (body.0, body.1));
+        // Whole bodies, in file order, while they fit; the rest are named so
+        // the next call asks for exactly those.
+        let mut used = 0usize;
+        let mut dropped = 0usize;
+        let mut later: Vec<&str> = Vec::new();
+        for (first, last, symbol) in bodies {
+            let (pieces, hidden_here) = strip(vec![(first, last)]);
+            let size = printed_chars(lines, &pieces);
+            if used + size > cap && !blocks.is_empty() {
+                if !later.contains(&symbol) {
+                    later.push(symbol);
+                }
+                continue;
+            }
+            dropped += hidden_here;
+            if size > cap {
+                let (kept, next) = within_chars(lines, &pieces, cap);
+                blocks.extend(kept);
+                if let Some(next) = next {
+                    notes.push(format!(
+                        "{symbol} stopped at {cap} characters; continue with from={next} to={last}"
+                    ));
+                }
+                used = cap;
+            } else {
+                blocks.extend(pieces);
+                used += size;
+            }
+        }
         notes.insert(0, found.join(", "));
         if !missing.is_empty() {
             notes.push(format!("not defined here: {}", missing.join(", ")));
         }
+        if !later.is_empty() {
+            notes.push(format!(
+                "past {cap} characters, not shown: {}; ask for them next (symbols={})",
+                later.join(", "),
+                later.join(",")
+            ));
+        }
         if request.no_comments {
-            let (kept, dropped) = without_comments(lines, blocks, &hidden);
-            blocks = kept;
             notes.push(format!("{dropped} comment lines hidden, and blank ones"));
         }
     } else if start > total {
         // Not an error: a caller paging forward has simply reached the end.
         notes.push(format!("file has {total} lines; nothing at line {start}"));
     } else {
-        let mut range = vec![(start, end)];
-        let mut dropped = 0;
-        if request.no_comments {
-            (range, dropped) = without_comments(lines, range, &hidden);
-        }
+        let (range, dropped) = strip(vec![(start, end)]);
         let size = printed_chars(lines, &range);
-        let too_long = !request.full && size > READ_CAP_CHARS;
-        let picked: Vec<usize> = if request.outline || too_long {
-            let scope = if request.outline && !request.ranged {
-                (1, total)
-            } else {
-                (start, end)
-            };
-            outline(lines, language, test_file)
-                .into_iter()
-                .filter(|line| (scope.0..=scope.1).contains(line))
-                .collect()
+        let scope = if request.ranged {
+            (start, end)
         } else {
-            Vec::new()
+            (1, total)
         };
-        if request.outline || (too_long && !picked.is_empty()) {
+        // The file's size decides, not a smaller budget: a tight budget on a
+        // short file still wants its code, cut where the budget ends.
+        let picked: Vec<usize> =
+            if request.outline || (!request.ranged && !request.full && size > READ_CAP_CHARS) {
+                outline(lines, language, test_file)
+                    .into_iter()
+                    .filter(|line| (scope.0..=scope.1).contains(line))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        if request.outline || !picked.is_empty() {
             outlined = true;
-            let scope = if request.ranged {
+            let what = if request.ranged {
                 format!("lines {start}-{end} of {total}")
             } else {
                 format!("{total} lines")
             };
             notes.push(if request.outline {
-                format!("outline of {scope}; {HOW_TO_READ}")
+                format!("outline of {what}; {HOW_TO_READ}")
             } else {
-                format!(
-                    "{scope} would be {size} characters, so this is their outline; {HOW_TO_READ}"
-                )
+                format!("{what} would be {size} characters, so this is the outline; {HOW_TO_READ}")
             });
             if test_file {
-                notes.push("test cases only; read a case by its line range".into());
+                notes.push("test cases only".into());
             }
+            next_step = next_step_example(lines, &picked, test_file);
             blocks = picked.into_iter().map(|line| (line, line)).collect();
             // An outline is a map, and a map past the cap is not one.
-            let (kept, next) = within_chars(lines, &blocks, READ_CAP_CHARS);
+            let (kept, next) = within_chars(lines, &blocks, outline_cap);
             if let Some(next) = next {
                 blocks = kept;
                 notes.push(format!(
-                    "outline stops at line {}; ask for the outline from line {next}",
+                    "outline stops at line {}; continue it with outline from={next}",
                     next - 1
                 ));
             }
         } else {
-            // Too long and nothing declared inside: the range is one long
-            // body, so give its start and say where to continue.
-            let cut = if too_long {
-                within_chars(lines, &range, READ_CAP_CHARS)
-            } else {
-                (range, None)
-            };
-            blocks = cut.0;
+            // A range, `full`, or a long file that declares nothing: the
+            // lines asked for, up to the cap, and where to continue.
+            let (kept, next) = within_chars(lines, &range, cap);
+            blocks = kept;
             let shown_end = blocks.last().map_or(end, |block| block.1);
             notes.push(format!("lines {start}-{shown_end} of {total}"));
-            if let Some(next) = cut.1 {
+            if let Some(next) = next {
                 notes.push(format!(
-                    "stopped at {READ_CAP_CHARS} characters; continue from line {next}, or ask for all of it (full)"
+                    "stopped at {cap} characters; continue with from={next}"
                 ));
-            } else if end < total {
-                notes.push("ask for a line range (from/to) for the rest".into());
+            } else if !request.ranged && end < total {
+                notes.push(format!("continue with from={}", end + 1));
             }
             if request.no_comments {
                 notes.push(format!("{dropped} comment lines hidden, and blank ones"));
@@ -597,31 +661,12 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         }
     }
 
-    // Whole lines only, and at least one, so a small budget still answers.
-    if let Some(budget) = request.max_tokens {
-        let mut used = 0usize;
-        let mut cut: Option<usize> = None;
-        let mut kept = Vec::new();
-        'blocks: for &(first, last) in &blocks {
-            for number in first..=last {
-                used += crate::render::estimate_tokens(&numbered(number, lines[number - 1]));
-                if used > budget && !(kept.is_empty() && number == first) {
-                    if number > first {
-                        kept.push((first, number - 1));
-                    }
-                    cut = Some(number);
-                    break 'blocks;
-                }
-            }
-            kept.push((first, last));
-        }
-        if let Some(next) = cut {
-            blocks = kept;
-            notes.push(format!(
-                "stopped at the {budget}-token budget; continue from line {next}"
-            ));
-        }
-    }
+    // Code was shown: add what it calls, so the next hop is not a call.
+    let uses = if request.uses && !outlined && !blocks.is_empty() {
+        lookup(&blocks)
+    } else {
+        crate::deps::Uses::default()
+    };
 
     if request.json {
         let items: Vec<serde_json::Value> = blocks
@@ -638,6 +683,8 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
             "blocks": items,
             "missing": missing,
             "notes": notes,
+            "next": next_step,
+            "uses": uses.to_json(),
         })
         .to_string());
     }
@@ -661,7 +708,110 @@ pub fn render_show(lines: &[&str], request: &ShowRequest) -> anyhow::Result<Stri
         }
         previous_end = Some(last);
     }
+    out.push_str(&uses.render());
+    // Last, where the reader's eye is when it decides what to do: a worked
+    // call steered agents to `symbols` where the header's advice did not.
+    if let Some(step) = next_step {
+        out.push_str(&format!("\n# next: {step}\n"));
+    }
     Ok(out)
+}
+
+/// A ready-to-use next call after an outline, built from the file's own
+/// names: bodies by name, or in a test file the first case by its lines.
+fn next_step_example(lines: &[&str], picked: &[usize], test_file: bool) -> Option<String> {
+    if test_file {
+        let cases: Vec<usize> = picked
+            .iter()
+            .copied()
+            .filter(|number| {
+                let trimmed = lines[number - 1].trim_start();
+                ["it(", "test(", "def test", "fn test", "func Test"]
+                    .iter()
+                    .any(|word| trimmed.starts_with(word))
+            })
+            .collect();
+        let first = *cases.first()?;
+        let last = picked
+            .iter()
+            .copied()
+            .find(|number| *number > first)
+            .map_or(first + 30, |next| next - 1);
+        return Some(format!(
+            "from={first} to={last} reads that test case; one range per case you need"
+        ));
+    }
+    let mut names: Vec<&str> = Vec::new();
+    for number in picked {
+        if let Some(name) = declared_name(lines[number - 1])
+            && !names.contains(&name)
+        {
+            names.push(name);
+        }
+        if names.len() == 3 {
+            break;
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "symbols={} reads just those bodies (use this file's names); from/to only for code that is not a definition",
+        names.join(",")
+    ))
+}
+
+/// The name a declaration line introduces: `isPlainObject` from
+/// `const isPlainObject = (val) => {`, `forEach` from `function forEach(`.
+pub(crate) fn declared_name(line: &str) -> Option<&str> {
+    const MODIFIERS: &[&str] = &[
+        "export ",
+        "default ",
+        "async ",
+        "static ",
+        "public ",
+        "private ",
+        "protected ",
+        "abstract ",
+        "unsafe ",
+        "extern ",
+    ];
+    const KEYWORDS: &[&str] = &[
+        "function* ",
+        "function ",
+        "const ",
+        "let ",
+        "var ",
+        "class ",
+        "async def ",
+        "def ",
+        "fn ",
+        "func ",
+        "fun ",
+        "type ",
+        "interface ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "module ",
+        "mod ",
+    ];
+    let mut rest = without_visibility(line.trim_start());
+    while let Some(stripped) = MODIFIERS.iter().find_map(|word| rest.strip_prefix(word)) {
+        rest = stripped;
+    }
+    let after_keyword = KEYWORDS.iter().find_map(|word| rest.strip_prefix(word));
+    let rest = match after_keyword {
+        // Go methods: `func (r *Reader) Read(` names `Read`.
+        Some(after) if after.starts_with('(') => after.split_once(") ")?.1,
+        Some(after) => after,
+        None => method_name(rest)?,
+    };
+    let end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+    (!name.is_empty() && !name.chars().next().is_some_and(|c| c.is_ascii_digit())).then_some(name)
 }
 
 /// The outline of every file under a directory, in path order, within the
@@ -742,7 +892,7 @@ pub fn render_folder(
 
 /// One line as `show` prints it: a tab after the number aligns like padding
 /// would, for fewer tokens than a padded gutter and a box character.
-fn numbered(number: usize, line: &str) -> String {
+pub(crate) fn numbered(number: usize, line: &str) -> String {
     format!("{number}\t{line}")
 }
 
@@ -949,6 +1099,10 @@ export default {
         assert!(!hidden.contains(&5) && !hidden.contains(&10));
     }
 
+    fn render_show_noop(lines: &[&str], request: &ShowRequest) -> anyhow::Result<String> {
+        render_show(lines, request, &mut |_| crate::deps::Uses::default())
+    }
+
     fn request<'a>(symbols: &'a [String]) -> ShowRequest<'a> {
         ShowRequest {
             repo: "axios/axios",
@@ -960,6 +1114,7 @@ export default {
             full: false,
             no_comments: false,
             max_tokens: None,
+            uses: false,
             json: false,
         }
     }
@@ -972,7 +1127,7 @@ export default {
             "forEach".to_string(),
             "nope".to_string(),
         ];
-        let out = render_show(&lines, &request(&symbols)).unwrap();
+        let out = render_show_noop(&lines, &request(&symbols)).unwrap();
         assert!(out.contains("5\tfunction forEach("), "{out}");
         assert!(out.contains("23\t};"), "{out}");
         assert!(out.contains("not defined here: nope"), "{out}");
@@ -985,13 +1140,13 @@ export default {
             "printed the doc comment: {out}"
         );
         let none = vec!["nope".to_string()];
-        assert!(render_show(&lines, &request(&none)).is_err());
+        assert!(render_show_noop(&lines, &request(&none)).is_err());
     }
 
     #[test]
     fn show_without_comments_keeps_line_numbers() {
         let lines = lines();
-        let out = render_show(
+        let out = render_show_noop(
             &lines,
             &ShowRequest {
                 no_comments: true,
@@ -1013,7 +1168,7 @@ export default {
     #[test]
     fn show_budget_says_where_to_continue() {
         let lines = lines();
-        let out = render_show(
+        let out = render_show_noop(
             &lines,
             &ShowRequest {
                 max_tokens: Some(30),
@@ -1022,13 +1177,13 @@ export default {
         )
         .unwrap();
         let next: usize = out
-            .split("continue from line ")
+            .split("continue with from=")
             .nth(1)
             .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|n| n.parse().ok())
             .expect("no continuation offered");
         assert!(out.contains(&format!("{}\t", next - 1)) && !out.contains(&format!("\n{next}\t")));
-        let json = render_show(
+        let json = render_show_noop(
             &lines,
             &ShowRequest {
                 json: true,
@@ -1077,15 +1232,15 @@ export default {
         );
     }
 
-    /// A read past the cap becomes the outline of what was asked for, says
-    /// why in plain words, and lists a test file's cases only. `full` gets
-    /// all of it; a range with nothing declared in it is cut and continued.
+    /// Only a plain read of a long file becomes its outline, which ends
+    /// with a worked next call. A range or `full` is the code asked for, up
+    /// to the cap, with where to continue: never an outline in its place.
     #[test]
-    fn long_reads_become_outlines_unless_full() {
+    fn plain_reads_outline_ranges_and_full_are_capped_code() {
         let mut lines = vec!["describe('x', () => {", "  it('works', () => {"];
         lines.extend(std::iter::repeat_n(
             "    assert.strictEqual(serialize({ a: [1, 2, 3] }), 'a[]=1&a[]=2&a[]=3');",
-            200,
+            400,
         ));
         lines.push("  it('also works', () => {");
         let total = lines.len();
@@ -1094,33 +1249,79 @@ export default {
             range: (1, total),
             ..request(&[])
         };
-        let out = render_show(&lines, &test).unwrap();
+        let out = render_show_noop(&lines, &test).unwrap();
         assert!(out.contains(&format!("{total} lines would be")), "{out}");
-        assert!(out.contains("ask for definitions by name (symbols), a smaller line range (from/to), or all of it (full)"), "{out}");
         assert!(!out.contains("--"), "flag syntax in a hint: {out}");
         assert!(
-            out.contains("1\tdescribe(") && out.contains("203\t  it('also works'"),
+            out.contains("1\tdescribe(") && out.contains("403\t  it('also works'"),
             "{out}"
         );
         assert!(!out.contains("assert.strictEqual"), "{out}");
-
-        let all = render_show(&lines, &ShowRequest { full: true, ..test }).unwrap();
         assert!(
-            all.contains("100\t    assert.strictEqual"),
-            "full was not all of it"
+            out.ends_with(
+                "# next: from=2 to=402 reads that test case; one range per case you need\n"
+            ),
+            "{out}"
         );
 
-        // Lines 3-200 hold no case: cut at the cap, with where to continue.
-        let body = render_show(
-            &lines,
-            &ShowRequest {
-                range: (3, 200),
+        for request in [
+            ShowRequest { full: true, ..test },
+            ShowRequest {
+                range: (3, 400),
                 ranged: true,
                 ..test
             },
-        )
-        .unwrap();
-        assert!(body.len() < READ_CAP_CHARS + 300, "{}", body.len());
-        assert!(body.contains("continue from line"), "{body}");
+        ] {
+            let read = render_show_noop(&lines, &request).unwrap();
+            assert!(
+                read.contains("\t    assert.strictEqual"),
+                "an outline instead of code: {read}"
+            );
+            assert!(read.len() < EXPLICIT_CAP_CHARS + 400, "{}", read.len());
+            assert!(read.contains("continue with from="), "{read}");
+            assert!(!read.contains("# next:"), "{read}");
+        }
+    }
+
+    #[test]
+    fn symbols_past_the_cap_are_named_for_the_next_call() {
+        let mut lines: Vec<String> = Vec::new();
+        for name in ["alpha", "beta", "gamma"] {
+            lines.push(format!("function {name}(input) {{"));
+            lines.extend(std::iter::repeat_n(
+                "  input = transform(input, { deep: true, keepOrder: true, label: 'step' });"
+                    .to_string(),
+                80,
+            ));
+            lines.push("}".to_string());
+        }
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let symbols = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        let out = render_show_noop(&lines, &request(&symbols)).unwrap();
+        assert!(
+            out.contains("1\tfunction alpha(") && out.contains("83\tfunction beta("),
+            "{out}"
+        );
+        assert!(!out.contains("function gamma("), "{out}");
+        assert!(
+            out.contains("not shown: gamma; ask for them next (symbols=gamma)"),
+            "{out}"
+        );
+        assert!(out.len() < EXPLICIT_CAP_CHARS + 400, "{}", out.len());
+    }
+
+    #[test]
+    fn declared_names_come_from_the_line() {
+        for (line, name) in [
+            ("const isPlainObject = (val) => {", "isPlainObject"),
+            ("export default async function forEach(obj) {", "forEach"),
+            ("pub(crate) fn search_path(", "search_path"),
+            ("func (r *Reader) Read(p []byte) (int, error) {", "Read"),
+            ("  static int count(char *s) {", "count"),
+            ("class AxiosHeaders {", "AxiosHeaders"),
+        ] {
+            assert_eq!(declared_name(line), Some(name), "{line}");
+        }
+        assert_eq!(declared_name("if (x) {"), None);
     }
 }

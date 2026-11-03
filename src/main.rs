@@ -7,6 +7,7 @@ mod audit;
 mod bulk;
 mod changelog;
 mod config;
+mod deps;
 mod discover;
 mod fetch;
 mod filters;
@@ -112,10 +113,10 @@ enum Command {
         /// Include hits inside comments and docstrings
         #[arg(long)]
         include_comments: bool,
-        /// Lines of code shown either side of a match. Raise it when comparing
-        /// how several projects implement the same thing.
-        #[arg(short = 'C', long, default_value_t = search::DEFAULT_CONTEXT_LINES)]
-        context: usize,
+        /// Lines of code shown either side of a match (default 2). Without it,
+        /// more than 10 matches come back one line each
+        #[arg(short = 'C', long)]
+        context: Option<usize>,
         /// Most results to take from any one repository. Use 1 to see how many
         /// different projects solve something, rather than one project many
         /// times.
@@ -150,8 +151,9 @@ enum Command {
         language: Option<String>,
         #[arg(long, default_value_t = 20)]
         limit: usize,
-        /// Stop adding results once the output would exceed this many tokens.
-        #[arg(long, default_value_t = 6000)]
+        /// Stop adding results once the output would exceed this many tokens
+        /// (about 6,000 characters by default); the rest are named
+        #[arg(long, default_value_t = 1500)]
         max_tokens: usize,
         /// Emit JSON instead of text
         #[arg(long)]
@@ -185,8 +187,16 @@ enum Command {
         /// Leave out comments, docstrings and blank lines; numbering is kept
         #[arg(long)]
         no_comments: bool,
-        /// Print all of the file or range, however long. Without it a read
-        /// over 6,000 characters prints its outline instead
+        /// Leave out the same-repo helpers the shown code calls
+        #[arg(long)]
+        no_uses: bool,
+        /// Helpers already shown, as path:line (the line their definition
+        /// starts on): named instead of repeated
+        #[arg(long, value_delimiter = ',')]
+        skip_uses: Vec<String>,
+        /// Read a long file from the top instead of printing its outline.
+        /// Like every read, it stops at 6,000 characters and says where to
+        /// continue
         #[arg(long, conflicts_with_all = ["symbols", "outline"])]
         full: bool,
         /// Emit JSON instead of text
@@ -887,7 +897,7 @@ fn run(cli: Cli) -> Result<()> {
                 ignore_case,
                 skip_comments: !include_comments,
                 // Capped: a huge value would paste whole files into a reply.
-                context_lines: context.min(40),
+                context_lines: context.unwrap_or(search::DEFAULT_CONTEXT_LINES).min(40),
                 per_repo,
                 ..Query::new(limit)
             };
@@ -1024,6 +1034,7 @@ fn run(cli: Cli) -> Result<()> {
                         &matches,
                         |visible| match_header(visible, &matches, "match(es)", &label),
                         max_tokens,
+                        context.is_none() && matches.len() > search::COMPACT_ABOVE_MATCHES,
                     )
                 );
             }
@@ -1167,6 +1178,7 @@ fn run(cli: Cli) -> Result<()> {
                         &matches,
                         |visible| match_header(visible, &matches, "definition(s)", &label),
                         max_tokens,
+                        false,
                     )
                 );
                 if !not_found.is_empty() && names.len() > 1 {
@@ -1189,6 +1201,8 @@ fn run(cli: Cli) -> Result<()> {
             outline,
             no_comments,
             full,
+            no_uses,
+            skip_uses,
             json,
         } => {
             check_positive("--limit", limit)?;
@@ -1238,6 +1252,22 @@ fn run(cli: Cli) -> Result<()> {
                 .into_iter()
                 .filter(|symbol| !symbol.trim().is_empty())
                 .collect();
+            let skip: std::collections::HashSet<(String, usize)> = skip_uses
+                .iter()
+                .filter_map(|entry| {
+                    let (file, line) = entry.trim().rsplit_once(':')?;
+                    Some((file.to_string(), line.parse().ok()?))
+                })
+                .collect();
+            let mut lookup = |shown: &[(usize, usize)]| {
+                deps::uses(&path, &text, shown, &skip, &mut |candidate| {
+                    store
+                        .read_path(&repo, candidate)
+                        .ok()
+                        .flatten()
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                })
+            };
             print!(
                 "{}",
                 outline::render_show(
@@ -1265,8 +1295,10 @@ fn run(cli: Cli) -> Result<()> {
                         full,
                         no_comments,
                         max_tokens,
+                        uses: !no_uses,
                         json,
                     },
+                    &mut lookup,
                 )?
             );
             if json {

@@ -237,16 +237,66 @@ pub fn render_matches_within(
     matches: &[Match],
     header: impl Fn(usize) -> String,
     budget: usize,
+    compact: bool,
 ) -> String {
     let (mut out, shown) = fit_within(matches, budget, |shown| {
-        render_matches(shown, &header(shown.len()))
+        if compact {
+            render_compact(shown, &header(shown.len()))
+        } else {
+            render_matches(shown, &header(shown.len()))
+        }
     });
     if shown < matches.len() {
+        // Named, so the reader can go straight to the ones it needs instead
+        // of re-running the search with a bigger budget.
+        let rest = &matches[shown..];
+        let mut places: Vec<String> = rest
+            .iter()
+            .take(OMITTED_NAMED)
+            .map(|item| format!("{}:{}", item.path, item.line_number))
+            .collect();
+        if rest.len() > OMITTED_NAMED {
+            places.push(format!("+{}", rest.len() - OMITTED_NAMED));
+        }
         out.push_str(&format!(
-            "\n[{} more match(es) omitted to stay within {budget} tokens; \
-             raise --max-tokens or narrow the search]\n",
-            matches.len() - shown
+            "\n[{} more match(es) past the {budget}-token budget: {}. Narrow the search \
+             (repo, path or pattern) or read one of these by line]\n",
+            rest.len(),
+            places.join(" ")
         ));
+    }
+    out
+}
+
+/// How many omitted matches are named individually.
+const OMITTED_NAMED: usize = 12;
+
+/// One line per match, grouped by file with a count: where every hit is,
+/// without the code around it.
+pub fn render_compact(matches: &[Match], header: &str) -> String {
+    let mut out = format!(
+        "{header}; one line each. Ask with context, or narrow the search, to see code around them\n"
+    );
+    let mut order: Vec<(&str, &str)> = Vec::new();
+    let mut grouped: std::collections::HashMap<(&str, &str), Vec<&Match>> = Default::default();
+    for item in matches {
+        let key = (item.repo.as_str(), item.path.as_str());
+        grouped.entry(key).or_default().push(item);
+        if !order.contains(&key) {
+            order.push(key);
+        }
+    }
+    for key in order {
+        let mut items = grouped[&key].clone();
+        items.sort_by_key(|item| item.line_number);
+        out.push_str(&format!("\n{} {} ({})\n", key.0, key.1, items.len()));
+        for item in items {
+            out.push_str(&format!(
+                "{}\t{}\n",
+                item.line_number,
+                clamp(item.matched_line().trim())
+            ));
+        }
     }
     out
 }
@@ -459,15 +509,17 @@ mod budget_tests {
     fn budget_is_respected_and_reported() {
         let matches = sample(30);
         for budget in [200usize, 800, 2000] {
-            let out = super::render_matches_within(&matches, |_| "30 match(es)".into(), budget);
+            let out =
+                super::render_matches_within(&matches, |_| "30 match(es)".into(), budget, false);
             let used = super::estimate_tokens(&out);
             assert!(
-                used <= budget + super::estimate_tokens("[30 more match(es) omitted]") + 40,
+                // The cut-off note names up to a dozen places on top.
+                used <= budget + 160,
                 "budget {budget} produced {used} tokens"
             );
             assert!(
-                out.contains("omitted"),
-                "budget {budget} cut without saying so"
+                out.contains("-token budget: src/file"),
+                "budget {budget} cut without naming what it left out: {out}"
             );
         }
     }
@@ -503,7 +555,7 @@ mod budget_tests {
     #[test]
     fn a_generous_budget_shows_everything() {
         let matches = sample(5);
-        let out = super::render_matches_within(&matches, |_| "5 match(es)".into(), 100_000);
+        let out = super::render_matches_within(&matches, |_| "5 match(es)".into(), 100_000, false);
         assert!(!out.contains("omitted"));
         for i in 0..5 {
             assert!(out.contains(&format!("org/repo{i}")), "lost result {i}");
