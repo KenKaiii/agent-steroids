@@ -26,4 +26,4 @@ tar = "0.4.46"
 tui-input = "0.15"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 ureq = "3.4.0"
-zstd = "0.13.3"
+zstd = "0.14.0"
