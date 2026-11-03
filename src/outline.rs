@@ -507,8 +507,8 @@ pub fn render_show(
     let mut blocks: Vec<(usize, usize)> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
     let mut outlined = false;
-    // Every line of the file was printed, nothing cut.
-    let mut whole_file = false;
+    // A whole file, or a read the caller will page through: no helpers.
+    let mut whole_or_paging = request.full;
     let mut next_step: Option<String> = None;
     let (start, end) = request.range;
     let hidden = if request.no_comments {
@@ -650,7 +650,7 @@ pub fn render_show(
             // A range, `full`, or a long file that declares nothing: the
             // lines asked for, up to the cap, and where to continue.
             let (kept, next) = within_chars(lines, &range, range_cap);
-            whole_file = start == 1 && end >= total && next.is_none();
+            whole_or_paging |= (start == 1 && end >= total) || next.is_some();
             blocks = kept;
             let shown_end = blocks.last().map_or(end, |block| block.1);
             notes.push(format!("lines {start}-{shown_end} of {total}"));
@@ -668,10 +668,11 @@ pub fn render_show(
     }
 
     // Code was shown: add what it calls, so the next hop is not a call. Not
-    // after a whole file: an agent reading files whole reads the ones it
-    // needs next, and in a race the helpers it was handed (19k of 135k
-    // characters) were largely read again.
-    let uses = if request.uses && !outlined && !whole_file && !blocks.is_empty() {
+    // after a whole file or one page of a longer read: an agent reading that
+    // way reads the files it needs next, and the helpers it was handed (19k
+    // of 135k characters in a race, then a third of each capped page) were
+    // largely read again.
+    let uses = if request.uses && !outlined && !whole_or_paging && !blocks.is_empty() {
         lookup(
             &blocks,
             crate::deps::uses_cap(printed_chars(lines, &blocks)),
@@ -1140,7 +1141,29 @@ export default {
         run((1, lines.len()), false);
         run((1, lines.len()), true);
         run((2, 10), true);
-        assert_eq!(asked.len(), 1, "only the partial read looks up helpers");
+        assert_eq!(asked.len(), 0, "full reads never look up helpers");
+        let mut run = |range: (usize, usize), max_tokens: Option<usize>| {
+            let read = ShowRequest {
+                range,
+                ranged: true,
+                max_tokens,
+                uses: true,
+                ..request(&[])
+            };
+            render_show(&lines, &read, &mut |shown, _| {
+                asked.push(shown.to_vec());
+                crate::deps::Uses::default()
+            })
+            .unwrap();
+        };
+        run((1, lines.len()), None);
+        run((2, 10), Some(1));
+        run((2, 10), None);
+        assert_eq!(
+            asked.len(),
+            1,
+            "only the complete partial read looks up helpers"
+        );
         assert_eq!(asked[0].first().map(|block| block.0), Some(2));
     }
 
