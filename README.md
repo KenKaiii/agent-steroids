@@ -13,12 +13,15 @@
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Built%20with-Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Built with Rust"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge" alt="AGPL-3.0 License"></a>
   <a href="https://youtube.com/@kenkaidoesai"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube"></a>
-  <a href="https://skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Community-7C3AED?style=for-the-badge" alt="Skool"></a>
+  <a href="https://www.skool.com/raid"><img src="https://img.shields.io/badge/Skool-Free%20community-7C3AED?style=for-the-badge" alt="Free Skool community"></a>
 </p>
 
 <p align="center">
   macOS · Linux · Windows · <a href="#-get-it">one command</a> · no server, no API key, no monthly fee
 </p>
+
+> [!TIP]
+> **Want the step-by-step guide?** The full Agent Steroids setup, a free 7-day build challenge and 20+ more projects are in my free community: **[skool.com/raid](https://www.skool.com/raid)**
 
 ---
 
@@ -281,7 +284,7 @@ src/tui/        the interactive browser
 ## 👥 Come hang out
 
 - [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
-- [Skool community](https://skool.com/kenkai)
+- [Free Skool community](https://www.skool.com/raid): a 7-day build challenge and 20+ step-by-step projects
 
 AGPL-3.0 licensed. Use it, change it, ship it. If you run a modified version as a service, share your changes under the same license.
 
