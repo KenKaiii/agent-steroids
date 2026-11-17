@@ -14,6 +14,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge" alt="AGPL-3.0 License"></a>
   <a href="https://youtube.com/@kenkaidoesai"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube"></a>
   <a href="https://www.skool.com/raid"><img src="https://img.shields.io/badge/Skool-Free%20community-7C3AED?style=for-the-badge" alt="Free Skool community"></a>
+  <a href="https://www.skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Raid%2B-7C3AED?style=for-the-badge" alt="Raid+ on Skool"></a>
+  <a href="https://www.kenkais.com"><img src="https://img.shields.io/badge/Website-kenkais.com-7C3AED?style=for-the-badge" alt="kenkais.com"></a>
 </p>
 
 <p align="center">
@@ -21,7 +23,10 @@
 </p>
 
 > [!TIP]
-> **Want the step-by-step guide?** The full Agent Steroids setup, a free 7-day build challenge and 20+ more projects are in my free community: **[skool.com/raid](https://www.skool.com/raid)**
+> **Want the step-by-step guide?**
+> - **Free community:** the full Agent Steroids setup, a 7-day build challenge and 20+ projects: [skool.com/raid](https://www.skool.com/raid)
+> - **Raid+:** make money with AI, a sellable app in 30 days, live every Thursday: [skool.com/kenkai](https://www.skool.com/kenkai)
+> - **Want it built for you?** [work.kenkais.com](https://work.kenkais.com/)
 
 ---
 
@@ -285,6 +290,8 @@ src/tui/        the interactive browser
 
 - [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
 - [Free Skool community](https://www.skool.com/raid): a 7-day build challenge and 20+ step-by-step projects
+- [Raid+](https://www.skool.com/kenkai): make money with AI, a sellable app in 30 days, live every Thursday
+- [work.kenkais.com](https://work.kenkais.com/): want it built for you?
 
 AGPL-3.0 licensed. Use it, change it, ship it. If you run a modified version as a service, share your changes under the same license.
 
