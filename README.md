@@ -23,7 +23,7 @@
 
 > [!TIP]
 > **Want the step-by-step guide?**
-> - **Raid+:** make money with AI, a sellable app in 30 days, live every Thursday: [skool.com/kenkai](https://www.skool.com/kenkai)
+> - **Raid+:** land your first paying client in 90 days or your money back, plus private tools you won't find anywhere else: [skool.com/kenkai](https://www.skool.com/kenkai)
 > - **Want it built for you?** [work.kenkais.com](https://work.kenkais.com/)
 
 ---
@@ -287,7 +287,7 @@ src/tui/        the interactive browser
 ## 👥 Come hang out
 
 - [YouTube @kenkaidoesai](https://youtube.com/@kenkaidoesai), tutorials and demos
-- [Raid+](https://www.skool.com/kenkai): make money with AI, a sellable app in 30 days, live every Thursday
+- [Raid+](https://www.skool.com/kenkai): first paying client in 90 days or your money back, plus private tools
 - [work.kenkais.com](https://work.kenkais.com/): want it built for you?
 
 AGPL-3.0 licensed. Use it, change it, ship it. If you run a modified version as a service, share your changes under the same license.
